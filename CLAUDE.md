@@ -97,3 +97,81 @@ loading. Confirmed working on the user's setup.
 - v2: predefined quick messages (buttons), zones/speaker groups, replay, message
   history, chime volume independent of message.
 - v3: two-way intercom, generic `media_player` support beyond Sonos.
+
+## Service reference (quick)
+
+Service: `sonos_intercom.announce`. Params: `message` OR `audio_url` (or neither,
+if only `chime`); `targets` (required, list of media_player entity_ids); `volume`
+(0-100 number, or a dict mapping entity_id -> 0-100 for per-speaker); `announce`
+(bool, default true); `tts_engine` (overrides default); `sync` (bool, default true);
+`chime` (one of: airport, ding_dong, soft_ping, marimba, gong).
+
+```yaml
+# TTS with a chime in front
+action: sonos_intercom.announce
+data:
+  message: "Middagen er klar"
+  chime: airport
+  targets: [media_player.kjokken, media_player.stue]
+  volume: 35
+  announce: true
+```
+```yaml
+# Chime alone
+action: sonos_intercom.announce
+data:
+  chime: ding_dong
+  targets: [media_player.stue]
+```
+
+## Lessons learned (debugging history)
+
+- **Card caching is the #1 footgun.** HA's service worker caches the card JS hard.
+  Always bump `CARD_VERSION` (const.py) + console banner + `manifest.json` when the
+  card changes, or stale UI is served. If still stale: hard refresh, or unregister
+  the service worker (DevTools -> Application -> Service Workers).
+- **"Custom element doesn't exist" flicker** was a load race from `add_extra_js_url`.
+  Fixed by registering the card as a **Lovelace resource** (deterministic load) plus
+  an `if (!customElements.get(...))` guard. Don't regress this.
+- **TTS needs a configured engine.** Set `default_tts_engine` in the integration
+  options to a TTS entity id (e.g. `tts.home_assistant_cloud`,
+  `tts.google_translate_en_com`). Without it you get "No TTS engine configured".
+  Find ids under Developer Tools -> States, filter `tts.`.
+- **Pushing:** the Cowork sandbox cannot push to GitHub (proxy 403). The user runs
+  `git push origin main` from their machine. Commit locally; let the user push.
+
+## Open questions / verify on real hardware
+
+- Multi-speaker **sync** via `join`/`unjoin` — confirm no echo/lag across a group.
+- Exact **TTS media-source format** / which engine string is most robust.
+- **Chime + TTS combine** quality (ffmpeg `concat` filter) — check seam/volume match.
+- **File reachability**: Sonos must fetch recordings/combined files over LAN
+  (`/local/...`); depends on HA internal URL being correct.
+- **restore** edge cases (speaker already grouped, or playing a streaming source).
+
+## Next steps / TODO (prioritized)
+
+1. **Quick messages**: config-driven preset buttons in the card ("Middagen er klar",
+   "Leggetid") that call `announce` with preset text (+ optional chime).
+2. **Zones / groups**: named target groups ("Oppe", "Nede", "Alle") instead of only
+   per-speaker chips.
+3. **Independent chime volume** vs message volume.
+4. **Replay** last message (service + card button).
+5. **Per-speaker volume UI** in the card (service already accepts a dict volume).
+6. **Message history**: keep recent recordings, allow replay.
+7. **Storage cleanup**: prune old files in `config/www/sonos_intercom/` (they
+   currently accumulate — recordings + combined chime files).
+8. **Local mic over HTTP**: document split-horizon DNS so mic works without HTTPS
+   round-trip when at home.
+9. **v3**: two-way intercom; generic `media_player` support beyond Sonos.
+
+## Conventions
+
+- Service domain `sonos_intercom`; card UI text in Norwegian; reply to the user in
+  Norwegian.
+- Before committing: `python3 -m py_compile custom_components/sonos_intercom/*.py`
+  and `node --check .../www/sonos-intercom-card.js`; validate changed JSON/YAML.
+- Bump versions together when the card changes: `manifest.json` version,
+  `CARD_VERSION` in const.py, and the console banner string in the card.
+- Single HACS integration repo; the card is bundled and auto-registered (no separate
+  frontend repo, no manual resource step for the user).
