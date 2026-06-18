@@ -14,18 +14,19 @@ from .announce import async_announce
 from .const import (
     ATTR_ANNOUNCE,
     ATTR_AUDIO_URL,
+    ATTR_CHIME,
     ATTR_MESSAGE,
     ATTR_SYNC,
     ATTR_TARGETS,
     ATTR_TTS_ENGINE,
     ATTR_VOLUME,
-    CARD_FILENAME,
     CARD_URL,
     CONF_DEFAULT_VOLUME,
     CONF_DEFAULT_TTS,
     DEFAULT_OPTIONS,
     DOMAIN,
     SERVICE_ANNOUNCE,
+    STATIC_BASE,
 )
 from .http import IntercomUploadView
 
@@ -43,6 +44,7 @@ ANNOUNCE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_ANNOUNCE, default=True): cv.boolean,
         vol.Optional(ATTR_TTS_ENGINE): cv.string,
         vol.Optional(ATTR_SYNC, default=True): cv.boolean,
+        vol.Optional(ATTR_CHIME): cv.string,
     }
 )
 
@@ -50,8 +52,9 @@ ANNOUNCE_SCHEMA = vol.Schema(
 def get_options(hass: HomeAssistant) -> dict:
     """Return the merged options from the first config entry (single instance)."""
     data = hass.data.get(DOMAIN, {})
-    for options in data.values():
-        return options
+    for key, options in data.items():
+        if not str(key).startswith("_"):
+            return options
     return dict(DEFAULT_OPTIONS)
 
 
@@ -60,15 +63,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {**DEFAULT_OPTIONS, **entry.options}
 
-    # Register the upload endpoint (only once).
     if not hass.data[DOMAIN].get("_view_registered"):
         hass.http.register_view(IntercomUploadView())
         hass.data[DOMAIN]["_view_registered"] = True
 
-    # Serve and auto-register the Lovelace card.
-    await _async_register_card(hass)
+    await _async_register_static(hass)
 
-    # Register the announce service (only once).
     if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
 
         async def handle_announce(call: ServiceCall) -> None:
@@ -84,6 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 announce=call.data.get(ATTR_ANNOUNCE, True),
                 tts_engine=call.data.get(ATTR_TTS_ENGINE) or options.get(CONF_DEFAULT_TTS),
                 sync=call.data.get(ATTR_SYNC, True),
+                chime=call.data.get(ATTR_CHIME),
             )
 
         hass.services.async_register(
@@ -94,18 +95,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def _async_register_card(hass: HomeAssistant) -> None:
-    """Serve the card as a static file and add it as an extra JS module."""
+async def _async_register_static(hass: HomeAssistant) -> None:
+    """Serve the integration's www folder and auto-register the card module."""
     from homeassistant.components.frontend import add_extra_js_url
     from homeassistant.components.http import StaticPathConfig
 
-    card_path = os.path.join(os.path.dirname(__file__), "www", CARD_FILENAME)
+    www_dir = os.path.join(os.path.dirname(__file__), "www")
     try:
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL, card_path, False)]
+            [StaticPathConfig(STATIC_BASE, www_dir, False)]
         )
     except RuntimeError:
-        # Path already registered (e.g. reload) - ignore.
+        # Already registered (e.g. reload) - ignore.
         pass
     add_extra_js_url(hass, CARD_URL)
 
@@ -118,10 +119,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-
-    # If this was the last entry, drop the service.
-    remaining = [k for k in hass.data.get(DOMAIN, {}) if not k.startswith("_")]
+    remaining = [k for k in hass.data.get(DOMAIN, {}) if not str(k).startswith("_")]
     if not remaining and hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
         hass.services.async_remove(DOMAIN, SERVICE_ANNOUNCE)
-
     return True

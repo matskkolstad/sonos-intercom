@@ -10,6 +10,7 @@ En custom Home Assistant-integrasjon som gir deg en **intercom** for Sonos-høyt
 - 🗣️ **Tekst-til-tale** på valgte høyttalere.
 - 🔊 **Volum per annonsering**, felles eller per høyttaler.
 - 📣 **Announce / ducking** – pågående musikk dempes og gjenopprettes.
+- 🔔 **Chimes** – fem innebygde, spill foran melding / alene / forhåndsvis.
 - 🧩 **Lovelace-kort** med opptaks-/tekstmodus, høyttalervalg og innstillinger.
 - ⚙️ **Service-kall** `sonos_intercom.announce` for automasjoner, scripts og Node-RED.
 
@@ -72,6 +73,20 @@ data:
 ## Innstillinger
 
 Settes via integrasjonens *Konfigurer*-skjerm: standardvolum, standard TTS-motor og lagringsmappe for opptak.
+
+## Chimes
+
+Integrasjonen kommer med fem innebygde chimes som kan spilles foran meldingen, alene, eller forhåndsvises i nettleseren:
+
+- **Flyplass** – PA-aktig nedadgående treklang
+- **Ding-dong** – klassisk dørklokke
+- **Mykt pling** – enkel, dempet bjelle
+- **Marimba** – stigende treklang
+- **Gong** – lav, fyldig gong
+
+I kortet velger du chime fra nedtrekksmenyen, trykker **▶ Forhåndsvis** for å høre den i nettleseren, eller **🔊 Høyttalere** for å spille den på de valgte Sonos-høyttalerne. Når du sender en melding med en chime valgt, kombineres chime + melding til én sømløs lydfil (via ffmpeg) før avspilling.
+
+I service-kall legger du til `chime: airport` (eller `ding_dong`, `soft_ping`, `marimba`, `gong`). Med kun `chime` og `targets` spilles chimen alene.
 
 ## Veikart
 

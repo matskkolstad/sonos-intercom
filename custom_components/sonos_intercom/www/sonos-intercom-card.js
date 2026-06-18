@@ -1,8 +1,18 @@
 /*
- * Sonos Intercom Card (v0.1)
- * A Lovelace card to record a voice message or type text and announce it
- * on selected Sonos speakers via the sonos_intercom.announce service.
+ * Sonos Intercom Card (v0.2)
+ * Record a voice message or type text, optionally prepend a chime, and
+ * announce it on selected Sonos speakers via sonos_intercom.announce.
  */
+
+const CHIMES = [
+  { id: "none", label: "Ingen", file: null },
+  { id: "airport", label: "Flyplass", file: "airport.mp3" },
+  { id: "ding_dong", label: "Ding-dong", file: "ding_dong.mp3" },
+  { id: "soft_ping", label: "Mykt pling", file: "soft_ping.mp3" },
+  { id: "marimba", label: "Marimba", file: "marimba.mp3" },
+  { id: "gong", label: "Gong", file: "gong.mp3" },
+];
+const CHIME_BASE = "/sonos_intercom_static/chimes/";
 
 const STYLES = `
   :host { --si-indigo:#8389cf; --si-coral:#e2998b; --si-sage:#84b6a6;
@@ -44,11 +54,22 @@ const STYLES = `
              background:var(--secondary-background-color,#fbfbfe);
              color:var(--primary-text-color,var(--si-ink)); }
   textarea:focus { outline:none; border-color:var(--si-indigo); }
+  select { width:100%; border:1.5px solid var(--si-line); border-radius:12px;
+           padding:10px 12px; font-family:inherit; font-size:14px; box-sizing:border-box;
+           background:var(--secondary-background-color,#fbfbfe);
+           color:var(--primary-text-color,var(--si-ink)); }
   .sec { font-size:12px; font-weight:650; color:var(--si-soft);
          text-transform:uppercase; letter-spacing:.05em; }
   .rowhead { display:flex; justify-content:space-between; align-items:center;
              margin-bottom:8px; }
   .link { font-size:12.5px; font-weight:600; color:var(--si-indigo); cursor:pointer; }
+  .chimerow { display:flex; gap:8px; align-items:center; }
+  .chimerow select { flex:1; }
+  .ghostbtn { border:1.5px solid var(--si-line); background:transparent;
+              color:var(--si-soft); border-radius:12px; padding:10px 12px;
+              font-family:inherit; font-size:13px; font-weight:600; cursor:pointer;
+              white-space:nowrap; }
+  .ghostbtn:hover { border-color:var(--si-indigo); color:var(--si-indigo); }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
   .chip { font-size:13px; font-weight:550; padding:8px 13px; border-radius:11px;
           cursor:pointer; background:rgba(131,137,207,.10); color:var(--si-soft);
@@ -65,7 +86,6 @@ const STYLES = `
           background:linear-gradient(135deg,var(--si-indigo),#9b9fdb);
           box-shadow:0 8px 20px rgba(131,137,207,.4); transition:transform .15s; }
   .send:hover { transform:translateY(-2px); }
-  .send.stop { background:linear-gradient(135deg,#d97d6c,#e2998b); }
   .send:disabled { opacity:.5; cursor:default; transform:none; }
   .status { font-size:12px; color:var(--si-soft); text-align:center; min-height:16px; }
   .status.err { color:var(--si-coral); }
@@ -83,12 +103,14 @@ class SonosIntercomCard extends HTMLElement {
     this._selected = new Set();
     this._announce = true;
     this._volume = 40;
+    this._chime = "none";
     this._recording = false;
     this._recorder = null;
     this._chunks = [];
     this._blob = null;
     this._timerId = null;
     this._seconds = 0;
+    this._previewAudio = null;
     this._rendered = false;
   }
 
@@ -105,14 +127,12 @@ class SonosIntercomCard extends HTMLElement {
     if (!this._rendered) this._render();
   }
 
-  getCardSize() { return 5; }
+  getCardSize() { return 6; }
 
   _speakers() {
     const cfg = this._config.entities;
     if (Array.isArray(cfg) && cfg.length) {
-      return cfg.map((e) =>
-        typeof e === "string" ? { entity: e } : e
-      );
+      return cfg.map((e) => (typeof e === "string" ? { entity: e } : e));
     }
     if (!this._hass) return [];
     return Object.keys(this._hass.states)
@@ -132,6 +152,9 @@ class SonosIntercomCard extends HTMLElement {
       this._selected.add(speakers[0].entity);
     }
     const isRec = this._mode === "record";
+    const chimeOptions = CHIMES.map(
+      (c) => `<option value="${c.id}" ${c.id === this._chime ? "selected" : ""}>${c.label}</option>`
+    ).join("");
 
     this.shadowRoot.innerHTML = `
       <style>${STYLES}</style>
@@ -156,6 +179,15 @@ class SonosIntercomCard extends HTMLElement {
 
         <div class="ttsblock ${isRec ? "hidden" : ""}">
           <textarea id="ttstext" placeholder="Skriv en melding som leses opp..."></textarea>
+        </div>
+
+        <div>
+          <div class="rowhead"><div class="sec">Chime</div>
+            <span class="link" id="cpreview">▶ Forhåndsvis</span></div>
+          <div class="chimerow">
+            <select id="chime">${chimeOptions}</select>
+            <button class="ghostbtn" id="cspk" title="Spill chimen på høyttalerne">🔊 Høyttalere</button>
+          </div>
         </div>
 
         <div>
@@ -193,6 +225,9 @@ class SonosIntercomCard extends HTMLElement {
       $("volval").textContent = this._volume + "%";
     });
     $("ann").addEventListener("change", (e) => { this._announce = e.target.checked; });
+    $("chime").addEventListener("change", (e) => { this._chime = e.target.value; });
+    $("cpreview").addEventListener("click", () => this._previewChime());
+    $("cspk").addEventListener("click", () => this._playChimeOnSpeakers());
     $("send").addEventListener("click", () => this._send());
 
     this._rendered = true;
@@ -225,6 +260,39 @@ class SonosIntercomCard extends HTMLElement {
   _setStatus(msg, isErr) {
     const el = this.shadowRoot.getElementById("status");
     if (el) { el.textContent = msg || ""; el.className = "status" + (isErr ? " err" : ""); }
+  }
+
+  _chimeFile(id) {
+    const c = CHIMES.find((x) => x.id === id);
+    return c ? c.file : null;
+  }
+
+  _previewChime() {
+    const file = this._chimeFile(this._chime);
+    if (!file) { this._setStatus("Velg en chime for å forhåndsvise."); return; }
+    try {
+      if (this._previewAudio) { this._previewAudio.pause(); }
+      this._previewAudio = new Audio(CHIME_BASE + file);
+      this._previewAudio.play();
+      this._setStatus("Forhåndsviser i nettleseren ♪");
+    } catch (err) {
+      this._setStatus("Kunne ikke spille av forhåndsvisning.", true);
+    }
+  }
+
+  async _playChimeOnSpeakers() {
+    const file = this._chimeFile(this._chime);
+    if (!file) { this._setStatus("Velg en chime først."); return; }
+    const targets = Array.from(this._selected);
+    if (!targets.length) { this._setStatus("Velg minst én høyttaler.", true); return; }
+    try {
+      await this._hass.callService("sonos_intercom", "announce", {
+        chime: this._chime, targets, volume: this._volume, announce: this._announce,
+      });
+      this._setStatus("Chime spilt på høyttalerne ✓");
+    } catch (err) {
+      this._setStatus("Noe gikk galt: " + (err.message || err), true);
+    }
   }
 
   async _toggleRecord() {
@@ -286,6 +354,7 @@ class SonosIntercomCard extends HTMLElement {
     if (!targets.length) { this._setStatus("Velg minst én høyttaler.", true); return; }
     const sendBtn = this.shadowRoot.getElementById("send");
     sendBtn.disabled = true;
+    const chime = this._chime !== "none" ? this._chime : undefined;
 
     try {
       if (this._mode === "record") {
@@ -297,17 +366,21 @@ class SonosIntercomCard extends HTMLElement {
           audio, format: "webm",
         });
         if (!resp || !resp.url) { this._setStatus("Opplasting feilet.", true); return; }
-        await this._hass.callService("sonos_intercom", "announce", {
+        const data = {
           audio_url: resp.url, targets, volume: this._volume, announce: this._announce,
-        });
+        };
+        if (chime) data.chime = chime;
+        await this._hass.callService("sonos_intercom", "announce", data);
         this._blob = null;
         this._setStatus("Melding sendt ✓");
       } else {
         const text = this.shadowRoot.getElementById("ttstext").value.trim();
         if (!text) { this._setStatus("Skriv en melding først.", true); return; }
-        await this._hass.callService("sonos_intercom", "announce", {
+        const data = {
           message: text, targets, volume: this._volume, announce: this._announce,
-        });
+        };
+        if (chime) data.chime = chime;
+        await this._hass.callService("sonos_intercom", "announce", data);
         this._setStatus("Melding sendt ✓");
       }
     } catch (err) {
@@ -324,9 +397,9 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "sonos-intercom-card",
   name: "Sonos Intercom Card",
-  description: "Spill inn eller skriv en melding og annonser den på Sonos-høyttalere.",
+  description: "Spill inn eller skriv en melding, legg på en chime, og annonser på Sonos.",
 });
 
-console.info("%c SONOS-INTERCOM-CARD %c v0.1.0 ",
+console.info("%c SONOS-INTERCOM-CARD %c v0.2.0 ",
   "color:#fff;background:#8389cf;border-radius:4px 0 0 4px;padding:2px 6px",
   "color:#8389cf;background:#eef0fb;border-radius:0 4px 4px 0;padding:2px 6px");

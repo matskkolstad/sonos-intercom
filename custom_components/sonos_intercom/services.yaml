@@ -1,8 +1,8 @@
 announce:
   name: Announce
   description: >-
-    Play a text-to-speech message or an audio clip on one or more Sonos
-    speakers, with optional ducking of currently playing audio.
+    Play a text-to-speech message, a recording and/or a chime on one or more
+    Sonos speakers, with optional ducking of currently playing audio.
   fields:
     message:
       name: Message
@@ -16,6 +16,26 @@ announce:
       example: "http://homeassistant.local:8123/local/sonos_intercom/intercom_123.mp3"
       selector:
         text:
+    chime:
+      name: Chime
+      description: Optional chime played before the message (or on its own).
+      example: airport
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - label: "None"
+              value: "none"
+            - label: "Airport"
+              value: "airport"
+            - label: "Ding-dong"
+              value: "ding_dong"
+            - label: "Soft ping"
+              value: "soft_ping"
+            - label: "Marimba"
+              value: "marimba"
+            - label: "Gong"
+              value: "gong"
     targets:
       name: Speakers
       description: The Sonos media_player entities to play on.

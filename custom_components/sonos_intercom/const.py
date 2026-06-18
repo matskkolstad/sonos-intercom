@@ -27,7 +27,21 @@ ATTR_VOLUME = "volume"
 ATTR_ANNOUNCE = "announce"
 ATTR_TTS_ENGINE = "tts_engine"
 ATTR_SYNC = "sync"
+ATTR_CHIME = "chime"
 
-# Frontend card
-CARD_URL = "/sonos_intercom_static/sonos-intercom-card.js"
+# Frontend / static serving
+STATIC_BASE = "/sonos_intercom_static"
 CARD_FILENAME = "sonos-intercom-card.js"
+CARD_URL = f"{STATIC_BASE}/{CARD_FILENAME}"
+CHIME_URL_BASE = f"{STATIC_BASE}/chimes"
+
+# Bundled chimes: id -> (filename, label)
+CHIMES = {
+    "airport": ("airport.mp3", "Flyplass"),
+    "ding_dong": ("ding_dong.mp3", "Ding-dong"),
+    "soft_ping": ("soft_ping.mp3", "Mykt pling"),
+    "marimba": ("marimba.mp3", "Marimba"),
+    "gong": ("gong.mp3", "Gong"),
+}
+
+CHIME_NONE = "none"
