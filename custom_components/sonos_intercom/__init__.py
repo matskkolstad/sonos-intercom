@@ -69,6 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN]["_view_registered"] = True
 
     await _async_register_static(hass)
+    await _async_register_card(hass)
 
     if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
 
@@ -97,8 +98,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_register_static(hass: HomeAssistant) -> None:
-    """Serve the integration's www folder and auto-register the card module."""
-    from homeassistant.components.frontend import add_extra_js_url
+    """Serve the integration's www folder (card + chimes) as static files."""
     from homeassistant.components.http import StaticPathConfig
 
     www_dir = os.path.join(os.path.dirname(__file__), "www")
@@ -109,7 +109,46 @@ async def _async_register_static(hass: HomeAssistant) -> None:
     except RuntimeError:
         # Already registered (e.g. reload) - ignore.
         pass
-    add_extra_js_url(hass, f"{CARD_URL}?v={CARD_VERSION}")
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Register the card as a Lovelace resource so it loads deterministically.
+
+    Falls back to add_extra_js_url for YAML-mode dashboards or if the Lovelace
+    resource collection is unavailable.
+    """
+    from homeassistant.components.frontend import add_extra_js_url
+
+    full_url = f"{CARD_URL}?v={CARD_VERSION}"
+
+    data = hass.data.get("lovelace")
+    resources = getattr(data, "resources", None)
+    if resources is None and isinstance(data, dict):
+        resources = data.get("resources")
+
+    # Storage-mode resource collection supports async_create_item.
+    if resources is None or not hasattr(resources, "async_create_item"):
+        add_extra_js_url(hass, full_url)
+        return
+
+    try:
+        if hasattr(resources, "loaded") and not resources.loaded:
+            await resources.async_load()
+            resources.loaded = True
+
+        for item in list(resources.async_items()):
+            if item.get("url", "").split("?")[0] == CARD_URL:
+                if item.get("url") != full_url:
+                    await resources.async_update_item(item["id"], {"url": full_url})
+                return
+
+        await resources.async_create_item({"res_type": "module", "url": full_url})
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning(
+            "Could not register Lovelace resource, falling back to extra_js_url: %s",
+            err,
+        )
+        add_extra_js_url(hass, full_url)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

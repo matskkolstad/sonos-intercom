@@ -33,7 +33,7 @@ ATTR_CHIME = "chime"
 STATIC_BASE = "/sonos_intercom_static"
 CARD_FILENAME = "sonos-intercom-card.js"
 CARD_URL = f"{STATIC_BASE}/{CARD_FILENAME}"
-CARD_VERSION = "0.2.1"  # bump to force browsers to reload the card
+CARD_VERSION = "0.2.2"  # bump to force browsers to reload the card
 CHIME_URL_BASE = f"{STATIC_BASE}/chimes"
 
 # Bundled chimes: id -> (filename, label)
