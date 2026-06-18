@@ -16,8 +16,10 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import (
     CONF_DEFAULT_TTS,
     CONF_DEFAULT_VOLUME,
+    CONF_RETENTION_HOURS,
     CONF_STORAGE_DIR,
     DEFAULT_OPTIONS,
+    DEFAULT_RETENTION_HOURS,
     DEFAULT_STORAGE_DIR,
     DEFAULT_VOLUME,
     DOMAIN,
@@ -79,6 +81,12 @@ class SonosIntercomOptionsFlow(OptionsFlow):
                     CONF_STORAGE_DIR,
                     default=opts.get(CONF_STORAGE_DIR, DEFAULT_STORAGE_DIR),
                 ): str,
+                vol.Optional(
+                    CONF_RETENTION_HOURS,
+                    default=opts.get(
+                        CONF_RETENTION_HOURS, DEFAULT_RETENTION_HOURS
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=8760)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

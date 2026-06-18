@@ -1,5 +1,5 @@
 /*
- * Sonos Intercom Card (v0.2)
+ * Sonos Intercom Card (v0.3)
  * Record a voice message or type text, optionally prepend a chime, and
  * announce it on selected Sonos speakers via sonos_intercom.announce.
  */
@@ -104,6 +104,7 @@ class SonosIntercomCard extends HTMLElement {
     this._announce = true;
     this._volume = 40;
     this._chime = "none";
+    this._chimeVolume = 100;
     this._recording = false;
     this._recorder = null;
     this._chunks = [];
@@ -188,6 +189,11 @@ class SonosIntercomCard extends HTMLElement {
             <select id="chime">${chimeOptions}</select>
             <button class="ghostbtn" id="cspk" title="Spill chimen på høyttalerne">🔊 Høyttalere</button>
           </div>
+          <div id="cvolwrap" class="${this._chime === "none" ? "hidden" : ""}" style="margin-top:12px">
+            <div class="rowhead"><div class="sec">Chime-volum</div>
+              <div class="link" id="cvolval">${this._chimeVolume}%</div></div>
+            <input type="range" id="cvol" min="0" max="100" value="${this._chimeVolume}">
+          </div>
         </div>
 
         <div>
@@ -208,6 +214,7 @@ class SonosIntercomCard extends HTMLElement {
         </div>
 
         <button class="send" id="send">${isRec ? "Spill av melding" : "Les opp melding"}</button>
+        <button class="ghostbtn" id="replay" style="width:100%">🔁 Spill av igjen</button>
         <div class="status" id="status"></div>
       </div>
     `;
@@ -225,10 +232,19 @@ class SonosIntercomCard extends HTMLElement {
       $("volval").textContent = this._volume + "%";
     });
     $("ann").addEventListener("change", (e) => { this._announce = e.target.checked; });
-    $("chime").addEventListener("change", (e) => { this._chime = e.target.value; });
+    $("chime").addEventListener("change", (e) => {
+      this._chime = e.target.value;
+      const wrap = $("cvolwrap");
+      if (wrap) wrap.classList.toggle("hidden", this._chime === "none");
+    });
+    $("cvol").addEventListener("input", (e) => {
+      this._chimeVolume = Number(e.target.value);
+      $("cvolval").textContent = this._chimeVolume + "%";
+    });
     $("cpreview").addEventListener("click", () => this._previewChime());
     $("cspk").addEventListener("click", () => this._playChimeOnSpeakers());
     $("send").addEventListener("click", () => this._send());
+    $("replay").addEventListener("click", () => this._replay());
 
     this._rendered = true;
   }
@@ -369,7 +385,7 @@ class SonosIntercomCard extends HTMLElement {
         const data = {
           audio_url: resp.url, targets, volume: this._volume, announce: this._announce,
         };
-        if (chime) data.chime = chime;
+        if (chime) { data.chime = chime; data.chime_volume = this._chimeVolume; }
         await this._hass.callService("sonos_intercom", "announce", data);
         this._blob = null;
         this._setStatus("Melding sendt ✓");
@@ -379,7 +395,7 @@ class SonosIntercomCard extends HTMLElement {
         const data = {
           message: text, targets, volume: this._volume, announce: this._announce,
         };
-        if (chime) data.chime = chime;
+        if (chime) { data.chime = chime; data.chime_volume = this._chimeVolume; }
         await this._hass.callService("sonos_intercom", "announce", data);
         this._setStatus("Melding sendt ✓");
       }
@@ -387,6 +403,18 @@ class SonosIntercomCard extends HTMLElement {
       this._setStatus("Noe gikk galt: " + (err.message || err), true);
     } finally {
       sendBtn.disabled = false;
+    }
+  }
+
+  async _replay() {
+    const targets = Array.from(this._selected);
+    const data = { volume: this._volume };
+    if (targets.length) data.targets = targets;
+    try {
+      await this._hass.callService("sonos_intercom", "replay", data);
+      this._setStatus("Spiller av forrige melding ✓");
+    } catch (err) {
+      this._setStatus("Noe gikk galt: " + (err.message || err), true);
     }
   }
 }
@@ -402,6 +430,6 @@ window.customCards.push({
   description: "Spill inn eller skriv en melding, legg på en chime, og annonser på Sonos.",
 });
 
-console.info("%c SONOS-INTERCOM-CARD %c v0.2.2 ",
+console.info("%c SONOS-INTERCOM-CARD %c v0.3.0 ",
   "color:#fff;background:#8389cf;border-radius:4px 0 0 4px;padding:2px 6px",
   "color:#8389cf;background:#eef0fb;border-radius:0 4px 4px 0;padding:2px 6px");

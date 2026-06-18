@@ -88,14 +88,16 @@ real debugging pain early on.
 
 ## Status
 
-Current version: **0.2.2**. Working: TTS, browser recording over HTTPS, 5 chimes
+Current version: **0.3.0**. Working: TTS, browser recording over HTTPS, 5 chimes
 (preview in browser, play alone on speakers, combine before message), stable card
-loading. Confirmed working on the user's setup.
+loading. 0.3.0 adds: independent **chime volume**, **replay** of the last message,
+and automatic **storage cleanup** (`retention_hours`). Up through 0.2.2 confirmed
+working on the user's setup; 0.3.0 features need real-hardware confirmation.
 
 ## Roadmap (next ideas)
 
-- v2: predefined quick messages (buttons), zones/speaker groups, replay, message
-  history, chime volume independent of message.
+- v2: predefined quick messages (buttons), zones/speaker groups, message history.
+  (Replay and independent chime volume landed in 0.3.0.)
 - v3: two-way intercom, generic `media_player` support beyond Sonos.
 
 ## Service reference (quick)
@@ -104,14 +106,28 @@ Service: `sonos_intercom.announce`. Params: `message` OR `audio_url` (or neither
 if only `chime`); `targets` (required, list of media_player entity_ids); `volume`
 (0-100 number, or a dict mapping entity_id -> 0-100 for per-speaker); `announce`
 (bool, default true); `tts_engine` (overrides default); `sync` (bool, default true);
-`chime` (one of: airport, ding_dong, soft_ping, marimba, gong).
+`chime` (one of: airport, ding_dong, soft_ping, marimba, gong); `chime_volume`
+(0-100, loudness of the chime relative to the message; only applies when a chime is
+combined with a message/recording — implemented as an ffmpeg `volume` gain on the
+chime stream during concat).
+
+Service: `sonos_intercom.replay`. Replays the last announcement (stored in
+`hass.data[DOMAIN]["_last"]`: resolved media id/type + targets/volume/announce/sync).
+Optional `targets` and `volume` override the stored ones. Pure-TTS replays always
+work (regenerated from the media-source id); recording/combined-chime replays depend
+on the file still existing (may have been pruned — see storage cleanup).
+
+Storage cleanup: on each `announce`, files under the storage dir whose names start
+with `_tts_`, `chime_`, `intercom_`, or `_tmp_` and are older than the
+`retention_hours` option (default 24; 0 disables) are deleted.
 
 ```yaml
-# TTS with a chime in front
+# TTS with a chime in front, chime at 60% of the message volume
 action: sonos_intercom.announce
 data:
   message: "Middagen er klar"
   chime: airport
+  chime_volume: 60
   targets: [media_player.kjokken, media_player.stue]
   volume: 35
   announce: true
@@ -122,6 +138,12 @@ action: sonos_intercom.announce
 data:
   chime: ding_dong
   targets: [media_player.stue]
+```
+```yaml
+# Replay the last announcement
+action: sonos_intercom.replay
+data:
+  targets: [media_player.stue]   # optional; reuses last targets if omitted
 ```
 
 ## Lessons learned (debugging history)
@@ -155,15 +177,15 @@ data:
    "Leggetid") that call `announce` with preset text (+ optional chime).
 2. **Zones / groups**: named target groups ("Oppe", "Nede", "Alle") instead of only
    per-speaker chips.
-3. **Independent chime volume** vs message volume.
-4. **Replay** last message (service + card button).
-5. **Per-speaker volume UI** in the card (service already accepts a dict volume).
-6. **Message history**: keep recent recordings, allow replay.
-7. **Storage cleanup**: prune old files in `config/www/sonos_intercom/` (they
-   currently accumulate — recordings + combined chime files).
-8. **Local mic over HTTP**: document split-horizon DNS so mic works without HTTPS
+3. **Per-speaker volume UI** in the card (service already accepts a dict volume).
+4. **Message history**: keep recent recordings, allow replay of more than just the
+   last one (0.3.0 replays only the most recent).
+5. **Local mic over HTTP**: document split-horizon DNS so mic works without HTTPS
    round-trip when at home.
-9. **v3**: two-way intercom; generic `media_player` support beyond Sonos.
+6. **v3**: two-way intercom; generic `media_player` support beyond Sonos.
+
+Done in 0.3.0: independent chime volume (#3 old), replay last message (#4 old),
+storage cleanup / `retention_hours` (#7 old).
 
 ## Conventions
 

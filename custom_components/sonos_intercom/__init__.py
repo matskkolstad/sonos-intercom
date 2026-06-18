@@ -10,11 +10,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .announce import async_announce
+from .announce import async_announce, async_replay
 from .const import (
     ATTR_ANNOUNCE,
     ATTR_AUDIO_URL,
     ATTR_CHIME,
+    ATTR_CHIME_VOLUME,
     ATTR_MESSAGE,
     ATTR_SYNC,
     ATTR_TARGETS,
@@ -27,6 +28,7 @@ from .const import (
     DEFAULT_OPTIONS,
     DOMAIN,
     SERVICE_ANNOUNCE,
+    SERVICE_REPLAY,
     STATIC_BASE,
 )
 from .http import IntercomUploadView
@@ -46,6 +48,19 @@ ANNOUNCE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TTS_ENGINE): cv.string,
         vol.Optional(ATTR_SYNC, default=True): cv.boolean,
         vol.Optional(ATTR_CHIME): cv.string,
+        vol.Optional(ATTR_CHIME_VOLUME): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=100)
+        ),
+    }
+)
+
+REPLAY_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_TARGETS): cv.entity_ids,
+        vol.Optional(ATTR_VOLUME): vol.Any(
+            vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            {cv.entity_id: vol.All(vol.Coerce(int), vol.Range(min=0, max=100))},
+        ),
     }
 )
 
@@ -87,10 +102,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 tts_engine=call.data.get(ATTR_TTS_ENGINE) or options.get(CONF_DEFAULT_TTS),
                 sync=call.data.get(ATTR_SYNC, True),
                 chime=call.data.get(ATTR_CHIME),
+                chime_volume=call.data.get(ATTR_CHIME_VOLUME),
             )
 
         hass.services.async_register(
             DOMAIN, SERVICE_ANNOUNCE, handle_announce, schema=ANNOUNCE_SCHEMA
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REPLAY):
+
+        async def handle_replay(call: ServiceCall) -> None:
+            await async_replay(
+                hass,
+                targets=call.data.get(ATTR_TARGETS),
+                volume=call.data.get(ATTR_VOLUME),
+            )
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_REPLAY, handle_replay, schema=REPLAY_SCHEMA
         )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -160,6 +189,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     remaining = [k for k in hass.data.get(DOMAIN, {}) if not str(k).startswith("_")]
-    if not remaining and hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
-        hass.services.async_remove(DOMAIN, SERVICE_ANNOUNCE)
+    if not remaining:
+        if hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
+            hass.services.async_remove(DOMAIN, SERVICE_ANNOUNCE)
+        if hass.services.has_service(DOMAIN, SERVICE_REPLAY):
+            hass.services.async_remove(DOMAIN, SERVICE_REPLAY)
     return True

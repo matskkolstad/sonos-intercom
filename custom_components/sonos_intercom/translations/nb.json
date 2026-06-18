@@ -17,7 +17,8 @@
         "data": {
           "default_volume": "Standardvolum (0-100)",
           "default_tts_engine": "Standard TTS-motor (id)",
-          "storage_dir": "Lagringsmappe for opptak (relativt til config)"
+          "storage_dir": "Lagringsmappe for opptak (relativt til config)",
+          "retention_hours": "Slett genererte filer eldre enn (timer, 0 = aldri)"
         }
       }
     }

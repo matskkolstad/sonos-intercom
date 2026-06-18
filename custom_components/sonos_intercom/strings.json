@@ -17,7 +17,8 @@
         "data": {
           "default_volume": "Default volume (0-100)",
           "default_tts_engine": "Default TTS engine id",
-          "storage_dir": "Storage folder for recordings (relative to config)"
+          "storage_dir": "Storage folder for recordings (relative to config)",
+          "retention_hours": "Auto-delete generated files older than (hours, 0 = never)"
         }
       }
     }

@@ -36,6 +36,17 @@ announce:
               value: "marimba"
             - label: "Gong"
               value: "gong"
+    chime_volume:
+      name: Chime volume
+      description: >-
+        Loudness of the chime relative to the message (0-100, 100 = same level).
+        Only applies when a chime is combined with a message or recording.
+      example: 60
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
     targets:
       name: Speakers
       description: The Sonos media_player entities to play on.
@@ -74,3 +85,29 @@ announce:
       default: true
       selector:
         boolean:
+
+replay:
+  name: Replay last message
+  description: >-
+    Replay the most recent announcement. Optionally override the target
+    speakers and/or the volume; otherwise the last ones are reused.
+  fields:
+    targets:
+      name: Speakers
+      description: >-
+        Speakers to replay on. If omitted, the speakers from the last
+        announcement are reused.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: media_player
+    volume:
+      name: Volume
+      description: Volume 0-100. If omitted, the last volume is reused.
+      example: 35
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
