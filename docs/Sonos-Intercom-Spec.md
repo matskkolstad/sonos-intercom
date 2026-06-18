@@ -2,7 +2,7 @@
 
 **Arbeidstittel:** Sonos Intercom
 **Type:** Custom integrasjon for Home Assistant (installeres via HACS) + tilhørende Lovelace-kort
-**Versjon:** Utkast 0.1 (designfase)
+**Versjon:** 0.4.0 (oppdatert fra opprinnelig designutkast 0.1)
 **Sist oppdatert:** 2026-06-18
 
 ---
@@ -101,8 +101,20 @@ Det sentrale service-kallet. Designet generisk slik at det dekker både TTS og f
 | `targets` | liste | Ja | Høyttalere meldingen skal spilles på |
 | `volume` | number / objekt | Nei | Felles volum, eller per-høyttaler volum |
 | `announce` | bool | Nei (default `true`) | Om musikk skal dempes og gjenopprettes |
+| `sync` | bool | Nei (default `true`) | Synkron avspilling ved flere mål (gruppering) |
 | `tts_engine` | string | Nei | Hvilken TTS-motor som skal brukes for `message` |
-| `chime` | string | Nei (v2) | Valgfri lyd som spilles foran meldingen |
+| `chime` | string | Nei | Chime foran meldingen — innebygd id eller egen (opplastet) chime-id |
+| `chime_volume` | number | Nei | Chimens volum relativt til meldingen (0-100) |
+| `language` | string | Nei (0.4.0) | TTS-språkkode (f.eks. `nb`, `en`) |
+| `voice` | string | Nei (0.4.0) | TTS-stemme (motoravhengig) |
+| `source` | string | Nei (0.4.0) | Fritekst-etikett for hvem/hvor meldingen kom fra (vises i innboks, brukes ved svar) |
+
+I tillegg finnes to støtte-services (0.4.0):
+
+- **`sonos_intercom.replay`** — spiller en melding fra historikken på nytt. Valgfri `index` (heltall, default 0 = nyeste) velger element; valgfri `targets`/`volume` overstyrer.
+- **`sonos_intercom.acknowledge`** — sender en kort kvittering («Mottatt») tilbake til siste meldings kilde/mål. En tynn innpakning rundt `announce` med standard chime. Params: `targets`, `message`, `chime` (default `soft_ping`), `volume` — alle valgfrie.
+
+Hver `announce` (og `acknowledge`) sender HA-hendelsen **`sonos_intercom_announced`** med data `{message, audio_url, chime, targets, volume, source}`, slik at brukerens automasjoner kan reagere.
 
 Eksempel (TTS):
 
@@ -145,30 +157,54 @@ For å unngå «ekko»-effekten ved annonsering til flere mål samtidig, gjør b
 
 Dette gir ekte synkron annonsering uten ekstern avhengighet.
 
+**Generell `media_player`-støtte (0.4.0):** `announce` fungerer også mot ikke-Sonos-spillere. Sonos-spesifikke steg (snapshot/restore, join/unjoin-gruppering) brukes kun for Sonos-entiteter (oppdaget via entity registry); andre mål bruker bare `play_media` med announce-flagget og hopper over gruppering. Grunnstøtten finnes, men er foreløpig ikke testet av vedlikeholderen (kun Sonos-oppsett).
+
 ### 4.5 Lovelace-kort
 
-En frontend-modul (lit/JavaScript) som ligger i samme HACS-repo. Kortet er en ren frontend som til slutt kaller `sonos_intercom.announce`. Funksjoner i v1:
+En frontend-modul (vanilla custom element) som ligger i samme HACS-repo. Kortet er en ren frontend som til slutt kaller `sonos_intercom.announce` / `replay` / `acknowledge`. Funksjoner:
 
 - Modusvelger: **Opptak** (mikrofon) / **Tekst** (TTS).
-- Stor opptaksknapp med tydelig opptak-pågår-tilstand (timer + visualisering).
-- Tekstfelt for TTS.
-- Høyttalervelger med «velg alle» og mulighet for å huke av enkelthøyttalere.
+- Stor opptaksknapp med tydelig opptak-pågår-tilstand (timer + visualisering), og **forhåndslytting** av opptaket i nettleseren («▶ Lytt») før sending.
+- Tekstfelt for TTS, med en **Avansert**-seksjon for TTS-språk og -stemme.
+- Høyttalervelger med «velg alle» og mulighet for å huke av enkelthøyttalere; **utilgjengelige høyttalere dempes/deaktiveres**.
 - Volum: felles slider, med mulighet for å folde ut per-høyttaler-volum.
 - Announce-toggle (demp/gjenopprett pågående lyd).
+- **Dynamisk chime-liste** (innebygde + egne) lest fra `sensor.sonos_intercom_last_message`, med opplastingsknapp («➕ Last opp chime»), forhåndsvisning og chime-volum.
+- **Innboks / Historikk**-seksjon: siste meldinger med gjenspilling («▶»), svar («↩︎ Svar», forhåndsvelger avsenderens høyttalere) og kvittering («✔ Kvitter»).
 - Send/spill-knapp.
-- Liten statuslinje / siste melding.
+- Liten statuslinje / siste melding (samt indikasjon på stille timer).
+- **Innstillinger huskes mellom økter** (volum, chime, chime-volum, announce, språk/stemme) via `localStorage`.
 
 ### 4.6 Config-flow
 
 Standard HA-innstillingsskjerm for integrasjonen, som dekker:
 
-- Standardvolum.
-- Standard-høyttalere.
-- Lagringssti for opptak (`/media` vs `/config/www`).
-- Oppbevaringstid / opprydding av gamle opptak.
-- (Senere) valg av backend: innebygd announce vs. Chime TTS.
+- `default_volume` — standardvolum.
+- `default_tts_engine` — standard TTS-motor.
+- `storage_dir` — lagringssti for opptak/genererte filer.
+- `retention_hours` — oppbevaringstid / automatisk opprydding av genererte filer (default 24; 0 = av).
+- `quiet_start` / `quiet_end` / `quiet_max_volume` — stille timer (se 4.7).
+- `custom_chime_dir` — mappe for egne chimes (default `www/sonos_intercom_chimes`, må ligge under `www/`).
+- `history_size` — antall meldinger i innboksen/historikken (default 20; i minnet, tapt ved omstart).
 
-Et fullt eget admin-panel er **ikke** nødvendig for v1 — config-flow dekker behovet.
+Et fullt eget admin-panel er **ikke** nødvendig — config-flow dekker behovet.
+
+### 4.7 Stille timer (nattmodus)
+
+Innenfor tidsrommet `quiet_start`–`quiet_end` (HH:MM) kappes annonseringsvolumet til `quiet_max_volume`. Er `quiet_max_volume` 0, hoppes annonseringer over helt. Sensorens attributt `quiet_active` viser om stille timer er aktive akkurat nå.
+
+### 4.8 Egne chimes
+
+Brukeren kan laste opp egne chime-lyder fra kortet (filvelger → `POST /api/sonos_intercom/chime_upload`) eller legge MP3-filer direkte i `custom_chime_dir`. Opplastede filer konverteres til MP3 med ffmpeg og lagres der. De dukker så opp i kortets chime-meny sammen med de fem innebygde. I service-kall brukes filnavnet uten filendelse som `chime`-verdi.
+
+### 4.9 Sensor og innboks/historikk
+
+Entiteten `sensor.sonos_intercom_last_message` eksponerer integrasjonens tilstand til kortet og til automasjoner:
+
+- **Tilstand:** siste meldingstekst (`[Opptak]` for opptak, `[Chime]` for chime alene, `Ingen` hvis ingen).
+- **Attributter:** `messages` (liste: tid, type, melding, audio_url, chime, mål, kilde, volum), `chimes` (id, etikett, custom, url), `quiet_active`, `last_source`, `last_targets`.
+
+Innboksen i kortet bygger på `messages`-attributtet. Toveis-funksjonen er en **meldingsinnboks med svar/kvittering** — Sonos-høyttalere har ingen mikrofon, så dette er compose-and-send tilbake til avsenderens sone, ikke levende tale.
 
 ---
 
@@ -199,18 +235,22 @@ Et fullt eget admin-panel er **ikke** nødvendig for v1 — config-flow dekker b
 sonos-intercom/
 ├── custom_components/
 │   └── sonos_intercom/
-│       ├── __init__.py          # oppsett, registrering av service + HTTP-view
+│       ├── __init__.py          # oppsett, registrering av services + HTTP-view + ressurs
 │       ├── manifest.json        # metadata, avhengigheter
-│       ├── config_flow.py       # innstillingsskjerm
-│       ├── const.py             # konstanter
-│       ├── services.yaml        # service-definisjon (UI-skjema)
-│       ├── http.py              # endepunkt for opptak (mottak + ffmpeg)
-│       ├── announce.py          # snapshot/grupper/annonser/restore-logikk
-│       └── strings.json         # oversettelser
-├── www/                         # eller eget frontend-repo
-│   └── sonos-intercom-card.js   # Lovelace-kortet
+│       ├── config_flow.py       # innstillingsskjerm (volum, TTS, lagring, stille timer, egne chimes, historikk)
+│       ├── const.py             # konstanter (DOMAIN, CHIMES, CARD_VERSION …)
+│       ├── services.yaml        # service-definisjoner (announce / replay / acknowledge)
+│       ├── http.py              # endepunkter: opptak + chime-opplasting (mottak + ffmpeg)
+│       ├── announce.py          # snapshot/grupper/annonser/restore + chime-kombinering; sender event
+│       ├── chimes.py            # innebygde + egne chimes (oppdaging, konvertering, oppslag)
+│       ├── sensor.py            # sensor.sonos_intercom_last_message (tilstand + historikk/chimes/stille timer)
+│       ├── www/sonos-intercom-card.js   # Lovelace-kortet (bundlet)
+│       ├── www/chimes/*.mp3     # innebygde chimes
+│       └── translations/        # oversettelser (en, nb)
+├── docs/Sonos-Intercom-Spec.md
 ├── hacs.json                    # HACS-metadata
 ├── README.md
+├── CHANGELOG.md
 └── LICENSE
 ```
 
@@ -232,7 +272,7 @@ sonos-intercom/
 
 ## 8. Faseplan
 
-### v1 — Kjernefunksjonalitet (Sonos-spesifikk)
+### v1 — Kjernefunksjonalitet (Sonos-spesifikk) — ferdig
 
 - Custom integrasjon med `sonos_intercom.announce` (tekst *eller* lyd-URL, høyttalervalg, volum, announce).
 - HTTP-endepunkt for opptak + ffmpeg-konvertering til MP3.
@@ -241,20 +281,24 @@ sonos-intercom/
 - Config-flow for standardverdier.
 - HACS-klar (manifest, hacs.json, README).
 
-### v2 — Utvidelser (backlog)
+### v2 — Utvidelser — i hovedsak ferdig (0.2.0–0.4.0)
 
-- **Chime / gong foran melding** (valgfritt backend mot Chime TTS).
-- **Forhåndsdefinerte hurtigmeldinger** som knapper («Middagen er klar», «Leggetid»).
-- **Soner / mål-grupper** («Oppe», «Nede», «Alle») i stedet for enkelthøyttalere.
-- **Replay** — spill siste melding på nytt.
-- **Meldingshistorikk** — lagre og gjenspill tidligere opptak.
-- **TTS-stemme per melding** hvis flere motorer er konfigurert.
-- **Lokal mikrofon over HTTP** via split-horizon DNS-veiledning.
+- **Chime foran melding** (innebygd announce, ffmpeg-kombinering — ikke Chime TTS) ✔
+- **Chime alene + forhåndsvisning** ✔
+- **Uavhengig chime-volum** ✔
+- **Replay** — spill melding på nytt, med valgfri `index` fra historikken ✔
+- **Meldingshistorikk / innboks** med svar og kvittering ✔
+- **Egne (opplastede) chimes** ✔
+- **TTS-stemme/språk per melding** (`voice` / `language`) ✔
+- **Stille timer / nattmodus** ✔
+- **Automatisk lagringsopprydding** (`retention_hours`) ✔
+- **Sensor + hendelse** (`sensor.sonos_intercom_last_message`, `sonos_intercom_announced`) ✔
+- *Gjenstår:* forhåndsdefinerte hurtigmeldinger (knapper), soner/mål-grupper, per-høyttaler-volum i kortet, lokal mikrofon over HTTP (split-horizon DNS-veiledning).
 
 ### v3 — Lengre sikt
 
-- **Toveis intercom** — annonser fra ett rom, svar tilbake fra et annet.
-- **Generell media_player-støtte** (Google, Music Assistant, m.fl.).
+- **Ekte toveis intercom med tale.** (0.4.0 har en første versjon uten mikrofon: meldingsinnboks med svar/kvittering — Sonos har ingen mikrofon, så levende tale gjenstår.)
+- **Generell media_player-støtte** (Google, Music Assistant, m.fl.). Grunnstøtte finnes i 0.4.0, men er ikke testet av vedlikeholderen.
 
 ---
 

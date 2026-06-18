@@ -1,18 +1,26 @@
 /*
- * Sonos Intercom Card (v0.3)
- * Record a voice message or type text, optionally prepend a chime, and
- * announce it on selected Sonos speakers via sonos_intercom.announce.
+ * Sonos Intercom Card (v0.4)
+ * Record a voice message or type text, optionally prepend a chime, and announce
+ * it on selected speakers via sonos_intercom.announce. Also: preview recordings,
+ * custom chime upload, TTS language/voice, an inbox/history with replay + reply +
+ * acknowledge, persisted settings, and dimming of unavailable speakers.
+ *
+ * Reads sensor.sonos_intercom_last_message for the dynamic chime list, the
+ * inbox/history and quiet-hours state.
  */
 
-const CHIMES = [
-  { id: "none", label: "Ingen", file: null },
-  { id: "airport", label: "Flyplass", file: "airport.mp3" },
-  { id: "ding_dong", label: "Ding-dong", file: "ding_dong.mp3" },
-  { id: "soft_ping", label: "Mykt pling", file: "soft_ping.mp3" },
-  { id: "marimba", label: "Marimba", file: "marimba.mp3" },
-  { id: "gong", label: "Gong", file: "gong.mp3" },
-];
+const SENSOR_ID = "sensor.sonos_intercom_last_message";
 const CHIME_BASE = "/sonos_intercom_static/chimes/";
+const PREFS_KEY = "sonos-intercom";
+
+// Fallback chime list used before the sensor is available.
+const STATIC_CHIMES = [
+  { id: "airport", label: "Flyplass", url: CHIME_BASE + "airport.mp3" },
+  { id: "ding_dong", label: "Ding-dong", url: CHIME_BASE + "ding_dong.mp3" },
+  { id: "soft_ping", label: "Mykt pling", url: CHIME_BASE + "soft_ping.mp3" },
+  { id: "marimba", label: "Marimba", url: CHIME_BASE + "marimba.mp3" },
+  { id: "gong", label: "Gong", url: CHIME_BASE + "gong.mp3" },
+];
 
 const STYLES = `
   :host { --si-indigo:#8389cf; --si-coral:#e2998b; --si-sage:#84b6a6;
@@ -29,6 +37,8 @@ const STYLES = `
            background:linear-gradient(140deg,var(--si-indigo),#a6abe0); }
   .title { font-size:16px; font-weight:650; }
   .sub { font-size:12.5px; color:var(--si-soft); }
+  .quiet { font-size:11.5px; font-weight:650; color:var(--si-coral);
+           margin-top:2px; }
   .modes { display:flex; background:rgba(131,137,207,.10); border-radius:13px;
            padding:4px; gap:4px; }
   .mode { flex:1; text-align:center; font-size:13.5px; font-weight:600;
@@ -53,10 +63,10 @@ const STYLES = `
              min-height:84px; box-sizing:border-box;
              background:var(--secondary-background-color,#fbfbfe);
              color:var(--primary-text-color,var(--si-ink)); }
-  textarea:focus { outline:none; border-color:var(--si-indigo); }
-  select { width:100%; border:1.5px solid var(--si-line); border-radius:12px;
-           padding:10px 12px; font-family:inherit; font-size:14px; box-sizing:border-box;
-           background:var(--secondary-background-color,#fbfbfe);
+  textarea:focus, input[type=text]:focus { outline:none; border-color:var(--si-indigo); }
+  select, input[type=text] { width:100%; border:1.5px solid var(--si-line);
+           border-radius:12px; padding:10px 12px; font-family:inherit; font-size:14px;
+           box-sizing:border-box; background:var(--secondary-background-color,#fbfbfe);
            color:var(--primary-text-color,var(--si-ink)); }
   .sec { font-size:12px; font-weight:650; color:var(--si-soft);
          text-transform:uppercase; letter-spacing:.05em; }
@@ -70,12 +80,14 @@ const STYLES = `
               font-family:inherit; font-size:13px; font-weight:600; cursor:pointer;
               white-space:nowrap; }
   .ghostbtn:hover { border-color:var(--si-indigo); color:var(--si-indigo); }
+  .adv { display:flex; gap:8px; } .adv > div { flex:1; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
   .chip { font-size:13px; font-weight:550; padding:8px 13px; border-radius:11px;
           cursor:pointer; background:rgba(131,137,207,.10); color:var(--si-soft);
           border:1.5px solid transparent; transition:.15s; }
   .chip.on { background:rgba(131,137,207,.18); color:var(--si-indigo);
              border-color:rgba(131,137,207,.45); }
+  .chip.off { opacity:.4; cursor:not-allowed; text-decoration:line-through; }
   input[type=range] { width:100%; accent-color:var(--si-indigo); }
   .togglerow { display:flex; align-items:center; justify-content:space-between;
                background:rgba(132,182,166,.16); border-radius:14px; padding:12px 14px; }
@@ -89,6 +101,17 @@ const STYLES = `
   .send:disabled { opacity:.5; cursor:default; transform:none; }
   .status { font-size:12px; color:var(--si-soft); text-align:center; min-height:16px; }
   .status.err { color:var(--si-coral); }
+  .inbox { display:flex; flex-direction:column; gap:8px; }
+  .msg { display:flex; align-items:center; gap:10px; padding:10px 12px;
+         border:1.5px solid var(--si-line); border-radius:12px; }
+  .msg .meta { flex:1; min-width:0; }
+  .msg .who { font-size:13px; font-weight:600; }
+  .msg .txt { font-size:12.5px; color:var(--si-soft); overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; }
+  .msg .acts { display:flex; gap:6px; flex:none; }
+  .iconbtn { border:1.5px solid var(--si-line); background:transparent; cursor:pointer;
+             border-radius:10px; padding:6px 9px; font-size:13px; color:var(--si-soft); }
+  .iconbtn:hover { border-color:var(--si-indigo); color:var(--si-indigo); }
   .hidden { display:none; }
 `;
 
@@ -105,6 +128,8 @@ class SonosIntercomCard extends HTMLElement {
     this._volume = 40;
     this._chime = "none";
     this._chimeVolume = 100;
+    this._language = "";
+    this._voice = "";
     this._recording = false;
     this._recorder = null;
     this._chunks = [];
@@ -113,6 +138,8 @@ class SonosIntercomCard extends HTMLElement {
     this._seconds = 0;
     this._previewAudio = null;
     this._rendered = false;
+    this._chimeSig = "";
+    this._inboxSig = "";
   }
 
   setConfig(config) {
@@ -120,15 +147,73 @@ class SonosIntercomCard extends HTMLElement {
     if (typeof this._config.default_volume === "number") {
       this._volume = this._config.default_volume;
     }
+    this._loadPrefs();
     this._rendered = false;
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._rendered) this._render();
+    else this._updateDynamic();
   }
 
-  getCardSize() { return 6; }
+  getCardSize() { return 8; }
+
+  // --- preferences -------------------------------------------------------
+  _prefsKey() { return PREFS_KEY + ":" + (this._config.title || "default"); }
+
+  _loadPrefs() {
+    try {
+      const raw = window.localStorage.getItem(this._prefsKey());
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (typeof p.volume === "number") this._volume = p.volume;
+      if (typeof p.chimeVolume === "number") this._chimeVolume = p.chimeVolume;
+      if (typeof p.chime === "string") this._chime = p.chime;
+      if (typeof p.announce === "boolean") this._announce = p.announce;
+      if (typeof p.mode === "string") this._mode = p.mode;
+      if (typeof p.language === "string") this._language = p.language;
+      if (typeof p.voice === "string") this._voice = p.voice;
+    } catch (err) { /* ignore */ }
+  }
+
+  _savePrefs() {
+    try {
+      window.localStorage.setItem(this._prefsKey(), JSON.stringify({
+        volume: this._volume, chimeVolume: this._chimeVolume, chime: this._chime,
+        announce: this._announce, mode: this._mode,
+        language: this._language, voice: this._voice,
+      }));
+    } catch (err) { /* ignore */ }
+  }
+
+  // --- data helpers ------------------------------------------------------
+  _sensor() {
+    const st = this._hass && this._hass.states;
+    if (!st) return null;
+    if (st[SENSOR_ID]) return st[SENSOR_ID];
+    const id = Object.keys(st).find((k) => k.startsWith("sensor.sonos_intercom"));
+    return id ? st[id] : null;
+  }
+
+  _availableChimes() {
+    const s = this._sensor();
+    const list = s && Array.isArray(s.attributes.chimes) ? s.attributes.chimes : null;
+    const chimes = [{ id: "none", label: "Ingen", url: null }];
+    (list && list.length ? list : STATIC_CHIMES).forEach((c) =>
+      chimes.push({ id: c.id, label: c.label, url: c.url }));
+    return chimes;
+  }
+
+  _chimeUrl(id) {
+    const c = this._availableChimes().find((x) => x.id === id);
+    return c ? c.url : null;
+  }
+
+  _messages() {
+    const s = this._sensor();
+    return s && Array.isArray(s.attributes.messages) ? s.attributes.messages : [];
+  }
 
   _speakers() {
     const cfg = this._config.entities;
@@ -146,16 +231,24 @@ class SonosIntercomCard extends HTMLElement {
     return (st && st.attributes.friendly_name) || entity.split(".")[1];
   }
 
+  _available(entity) {
+    const st = this._hass && this._hass.states[entity];
+    return !!st && st.state !== "unavailable" && st.state !== "unknown";
+  }
+
+  _sourceLabel() {
+    return this._config.source || this._config.title || "Intercom";
+  }
+
+  // --- render ------------------------------------------------------------
   _render() {
     if (!this._hass) return;
     const speakers = this._speakers();
     if (this._selected.size === 0 && speakers.length) {
-      this._selected.add(speakers[0].entity);
+      const first = speakers.find((s) => this._available(s.entity)) || speakers[0];
+      this._selected.add(first.entity);
     }
     const isRec = this._mode === "record";
-    const chimeOptions = CHIMES.map(
-      (c) => `<option value="${c.id}" ${c.id === this._chime ? "selected" : ""}>${c.label}</option>`
-    ).join("");
 
     this.shadowRoot.innerHTML = `
       <style>${STYLES}</style>
@@ -163,7 +256,8 @@ class SonosIntercomCard extends HTMLElement {
         <div class="top">
           <div class="badge">${MIC_SVG}</div>
           <div><div class="title">${this._config.title || "Intercom"}</div>
-            <div class="sub">Send en melding til høyttalerne</div></div>
+            <div class="sub">Send en melding til høyttalerne</div>
+            <div class="quiet hidden" id="quiet">🌙 Stille timer aktiv</div></div>
         </div>
         <div class="modes">
           <div class="mode ${isRec ? "active" : ""}" data-mode="record">Opptak</div>
@@ -175,19 +269,28 @@ class SonosIntercomCard extends HTMLElement {
             <button class="recbtn" id="rec">${MIC_SVG}</button>
             <div class="hint" id="rechint">Trykk for å spille inn</div>
             <div class="timer hidden" id="timer">00:00</div>
+            <button class="ghostbtn hidden" id="preview">▶ Lytt på opptaket</button>
           </div>
         </div>
 
         <div class="ttsblock ${isRec ? "hidden" : ""}">
           <textarea id="ttstext" placeholder="Skriv en melding som leses opp..."></textarea>
+          <div style="margin-top:10px">
+            <div class="rowhead"><div class="sec">Avansert (stemme/språk)</div></div>
+            <div class="adv">
+              <div><input type="text" id="lang" placeholder="Språk, f.eks. nb" value="${this._language}"></div>
+              <div><input type="text" id="voice" placeholder="Stemme (valgfri)" value="${this._voice}"></div>
+            </div>
+          </div>
         </div>
 
         <div>
           <div class="rowhead"><div class="sec">Chime</div>
             <span class="link" id="cpreview">▶ Forhåndsvis</span></div>
           <div class="chimerow">
-            <select id="chime">${chimeOptions}</select>
-            <button class="ghostbtn" id="cspk" title="Spill chimen på høyttalerne">🔊 Høyttalere</button>
+            <select id="chime"></select>
+            <button class="ghostbtn" id="cspk" title="Spill chimen på høyttalerne">🔊</button>
+            <button class="ghostbtn" id="cup" title="Last opp egen chime">➕</button>
           </div>
           <div id="cvolwrap" class="${this._chime === "none" ? "hidden" : ""}" style="margin-top:12px">
             <div class="rowhead"><div class="sec">Chime-volum</div>
@@ -215,38 +318,81 @@ class SonosIntercomCard extends HTMLElement {
 
         <button class="send" id="send">${isRec ? "Spill av melding" : "Les opp melding"}</button>
         <button class="ghostbtn" id="replay" style="width:100%">🔁 Spill av igjen</button>
+
+        <div id="inboxwrap">
+          <div class="rowhead"><div class="sec">Innboks / historikk</div></div>
+          <div class="inbox" id="inbox"></div>
+        </div>
+
         <div class="status" id="status"></div>
       </div>
     `;
 
-    this._renderChips();
     const $ = (id) => this.shadowRoot.getElementById(id);
+    this._renderChips();
+    this._refreshChimeOptions(true);
+    this._renderInbox(true);
+    this._refreshQuiet();
 
     this.shadowRoot.querySelectorAll(".mode").forEach((el) =>
-      el.addEventListener("click", () => { this._mode = el.dataset.mode; this._render(); })
+      el.addEventListener("click", () => {
+        this._mode = el.dataset.mode; this._savePrefs(); this._render();
+      })
     );
     $("rec").addEventListener("click", () => this._toggleRecord());
+    $("preview").addEventListener("click", () => this._previewRecording());
     $("selall").addEventListener("click", () => this._toggleAll());
     $("vol").addEventListener("input", (e) => {
       this._volume = Number(e.target.value);
-      $("volval").textContent = this._volume + "%";
+      $("volval").textContent = this._volume + "%"; this._savePrefs();
     });
-    $("ann").addEventListener("change", (e) => { this._announce = e.target.checked; });
+    $("ann").addEventListener("change", (e) => { this._announce = e.target.checked; this._savePrefs(); });
     $("chime").addEventListener("change", (e) => {
       this._chime = e.target.value;
       const wrap = $("cvolwrap");
       if (wrap) wrap.classList.toggle("hidden", this._chime === "none");
+      this._savePrefs();
     });
     $("cvol").addEventListener("input", (e) => {
       this._chimeVolume = Number(e.target.value);
-      $("cvolval").textContent = this._chimeVolume + "%";
+      $("cvolval").textContent = this._chimeVolume + "%"; this._savePrefs();
     });
+    $("lang").addEventListener("change", (e) => { this._language = e.target.value.trim(); this._savePrefs(); });
+    $("voice").addEventListener("change", (e) => { this._voice = e.target.value.trim(); this._savePrefs(); });
     $("cpreview").addEventListener("click", () => this._previewChime());
     $("cspk").addEventListener("click", () => this._playChimeOnSpeakers());
+    $("cup").addEventListener("click", () => this._uploadChime());
     $("send").addEventListener("click", () => this._send());
     $("replay").addEventListener("click", () => this._replay());
 
     this._rendered = true;
+  }
+
+  _updateDynamic() {
+    if (!this.shadowRoot.getElementById("chips")) return;
+    this._renderChips();
+    this._refreshChimeOptions(false);
+    this._renderInbox(false);
+    this._refreshQuiet();
+  }
+
+  _refreshQuiet() {
+    const el = this.shadowRoot.getElementById("quiet");
+    const s = this._sensor();
+    if (el) el.classList.toggle("hidden", !(s && s.attributes.quiet_active));
+  }
+
+  _refreshChimeOptions(force) {
+    const sel = this.shadowRoot.getElementById("chime");
+    if (!sel) return;
+    const chimes = this._availableChimes();
+    const sig = chimes.map((c) => c.id).join(",");
+    if (!force && sig === this._chimeSig) return;
+    this._chimeSig = sig;
+    sel.innerHTML = chimes.map(
+      (c) => `<option value="${c.id}" ${c.id === this._chime ? "selected" : ""}>${c.label}</option>`
+    ).join("");
+    sel.value = this._chime;
   }
 
   _renderChips() {
@@ -254,21 +400,72 @@ class SonosIntercomCard extends HTMLElement {
     if (!wrap) return;
     wrap.innerHTML = "";
     this._speakers().forEach((sp) => {
+      const ok = this._available(sp.entity);
       const chip = document.createElement("div");
-      chip.className = "chip" + (this._selected.has(sp.entity) ? " on" : "");
+      chip.className = "chip" + (this._selected.has(sp.entity) ? " on" : "") + (ok ? "" : " off");
       chip.textContent = sp.name || this._name(sp.entity);
-      chip.addEventListener("click", () => {
-        if (this._selected.has(sp.entity)) this._selected.delete(sp.entity);
-        else this._selected.add(sp.entity);
-        this._renderChips();
-      });
+      if (ok) {
+        chip.addEventListener("click", () => {
+          if (this._selected.has(sp.entity)) this._selected.delete(sp.entity);
+          else this._selected.add(sp.entity);
+          this._renderChips();
+        });
+      } else {
+        chip.title = "Utilgjengelig";
+      }
       wrap.appendChild(chip);
     });
   }
 
+  _renderInbox(force) {
+    const wrap = this.shadowRoot.getElementById("inbox");
+    const box = this.shadowRoot.getElementById("inboxwrap");
+    if (!wrap || !box) return;
+    const msgs = this._messages();
+    const sig = msgs.length + "|" + (msgs[0] ? msgs[0].time : "");
+    if (!force && sig === this._inboxSig) return;
+    this._inboxSig = sig;
+    box.classList.toggle("hidden", msgs.length === 0);
+    wrap.innerHTML = "";
+    msgs.slice(0, 8).forEach((m, i) => {
+      const summary = m.message ? m.message
+        : m.kind === "recording" ? "[Opptak]" : "[Chime]";
+      const who = m.source || (Array.isArray(m.targets) ? m.targets.map((t) => this._name(t)).join(", ") : "—");
+      const when = this._fmtTime(m.time);
+      const row = document.createElement("div");
+      row.className = "msg";
+      row.innerHTML = `
+        <div class="meta">
+          <div class="who">${this._esc(who)}${when ? ` · ${when}` : ""}</div>
+          <div class="txt">${this._esc(summary)}</div>
+        </div>
+        <div class="acts">
+          <button class="iconbtn" data-act="play" title="Spill av igjen">▶</button>
+          <button class="iconbtn" data-act="reply" title="Svar">↩︎</button>
+          <button class="iconbtn" data-act="ack" title="Kvitter mottatt">✔</button>
+        </div>`;
+      row.querySelector('[data-act="play"]').addEventListener("click", () => this._replayIndex(i));
+      row.querySelector('[data-act="reply"]').addEventListener("click", () => this._reply(m));
+      row.querySelector('[data-act="ack"]').addEventListener("click", () => this._acknowledge(m));
+      wrap.appendChild(row);
+    });
+  }
+
+  _fmtTime(iso) {
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } catch (err) { return ""; }
+  }
+
+  _esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
   _toggleAll() {
-    const speakers = this._speakers();
-    if (this._selected.size === speakers.length) this._selected.clear();
+    const speakers = this._speakers().filter((s) => this._available(s.entity));
+    const allOn = speakers.length && speakers.every((s) => this._selected.has(s.entity));
+    if (allOn) speakers.forEach((s) => this._selected.delete(s.entity));
     else speakers.forEach((s) => this._selected.add(s.entity));
     this._renderChips();
   }
@@ -278,17 +475,13 @@ class SonosIntercomCard extends HTMLElement {
     if (el) { el.textContent = msg || ""; el.className = "status" + (isErr ? " err" : ""); }
   }
 
-  _chimeFile(id) {
-    const c = CHIMES.find((x) => x.id === id);
-    return c ? c.file : null;
-  }
-
+  // --- chime preview / upload -------------------------------------------
   _previewChime() {
-    const file = this._chimeFile(this._chime);
-    if (!file) { this._setStatus("Velg en chime for å forhåndsvise."); return; }
+    const url = this._chimeUrl(this._chime);
+    if (!url) { this._setStatus("Velg en chime for å forhåndsvise."); return; }
     try {
-      if (this._previewAudio) { this._previewAudio.pause(); }
-      this._previewAudio = new Audio(CHIME_BASE + file);
+      if (this._previewAudio) this._previewAudio.pause();
+      this._previewAudio = new Audio(url);
       this._previewAudio.play();
       this._setStatus("Forhåndsviser i nettleseren ♪");
     } catch (err) {
@@ -297,8 +490,7 @@ class SonosIntercomCard extends HTMLElement {
   }
 
   async _playChimeOnSpeakers() {
-    const file = this._chimeFile(this._chime);
-    if (!file) { this._setStatus("Velg en chime først."); return; }
+    if (this._chime === "none") { this._setStatus("Velg en chime først."); return; }
     const targets = Array.from(this._selected);
     if (!targets.length) { this._setStatus("Velg minst én høyttaler.", true); return; }
     try {
@@ -311,6 +503,36 @@ class SonosIntercomCard extends HTMLElement {
     }
   }
 
+  _uploadChime() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "audio/*";
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        this._setStatus("Laster opp chime...");
+        const audio = await this._blobToBase64(file);
+        const ext = (file.name.split(".").pop() || "mp3").toLowerCase();
+        const name = file.name.replace(/\.[^.]+$/, "");
+        const resp = await this._hass.callApi("POST", "sonos_intercom/chime_upload", {
+          audio, format: ext, name,
+        });
+        if (resp && resp.id) {
+          this._chime = resp.id; this._savePrefs();
+          this._refreshChimeOptions(true);
+          this._setStatus("Chime lastet opp ✓");
+        } else {
+          this._setStatus("Opplasting feilet.", true);
+        }
+      } catch (err) {
+        this._setStatus("Noe gikk galt: " + (err.message || err), true);
+      }
+    });
+    input.click();
+  }
+
+  // --- recording ---------------------------------------------------------
   async _toggleRecord() {
     if (this._recording) { this._stopRecord(); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -326,7 +548,9 @@ class SonosIntercomCard extends HTMLElement {
       this._recorder.onstop = () => {
         this._blob = new Blob(this._chunks, { type: "audio/webm" });
         stream.getTracks().forEach((t) => t.stop());
-        this._setStatus("Opptak klart - trykk for å sende.");
+        const preview = this.shadowRoot.getElementById("preview");
+        if (preview) preview.classList.remove("hidden");
+        this._setStatus("Opptak klart - lytt eller send.");
       };
       this._recorder.start();
       this._recording = true;
@@ -334,6 +558,8 @@ class SonosIntercomCard extends HTMLElement {
       const btn = this.shadowRoot.getElementById("rec");
       const timer = this.shadowRoot.getElementById("timer");
       const hint = this.shadowRoot.getElementById("rechint");
+      const preview = this.shadowRoot.getElementById("preview");
+      if (preview) preview.classList.add("hidden");
       btn.classList.add("live"); btn.innerHTML = STOP_SVG;
       hint.classList.add("hidden"); timer.classList.remove("hidden");
       this._timerId = setInterval(() => {
@@ -356,6 +582,18 @@ class SonosIntercomCard extends HTMLElement {
     if (btn) { btn.classList.remove("live"); btn.innerHTML = MIC_SVG; }
   }
 
+  _previewRecording() {
+    if (!this._blob) { this._setStatus("Ingen opptak å lytte på."); return; }
+    try {
+      if (this._previewAudio) this._previewAudio.pause();
+      this._previewAudio = new Audio(URL.createObjectURL(this._blob));
+      this._previewAudio.play();
+      this._setStatus("Spiller av opptaket ♪");
+    } catch (err) {
+      this._setStatus("Kunne ikke spille av opptaket.", true);
+    }
+  }
+
   _blobToBase64(blob) {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -365,6 +603,7 @@ class SonosIntercomCard extends HTMLElement {
     });
   }
 
+  // --- send / replay / reply / acknowledge -------------------------------
   async _send() {
     const targets = Array.from(this._selected);
     if (!targets.length) { this._setStatus("Velg minst én høyttaler.", true); return; }
@@ -383,19 +622,25 @@ class SonosIntercomCard extends HTMLElement {
         });
         if (!resp || !resp.url) { this._setStatus("Opplasting feilet.", true); return; }
         const data = {
-          audio_url: resp.url, targets, volume: this._volume, announce: this._announce,
+          audio_url: resp.url, targets, volume: this._volume,
+          announce: this._announce, source: this._sourceLabel(),
         };
         if (chime) { data.chime = chime; data.chime_volume = this._chimeVolume; }
         await this._hass.callService("sonos_intercom", "announce", data);
         this._blob = null;
+        const preview = this.shadowRoot.getElementById("preview");
+        if (preview) preview.classList.add("hidden");
         this._setStatus("Melding sendt ✓");
       } else {
         const text = this.shadowRoot.getElementById("ttstext").value.trim();
         if (!text) { this._setStatus("Skriv en melding først.", true); return; }
         const data = {
-          message: text, targets, volume: this._volume, announce: this._announce,
+          message: text, targets, volume: this._volume,
+          announce: this._announce, source: this._sourceLabel(),
         };
         if (chime) { data.chime = chime; data.chime_volume = this._chimeVolume; }
+        if (this._language) data.language = this._language;
+        if (this._voice) data.voice = this._voice;
         await this._hass.callService("sonos_intercom", "announce", data);
         this._setStatus("Melding sendt ✓");
       }
@@ -408,11 +653,41 @@ class SonosIntercomCard extends HTMLElement {
 
   async _replay() {
     const targets = Array.from(this._selected);
-    const data = { volume: this._volume };
+    const data = { volume: this._volume, index: 0 };
     if (targets.length) data.targets = targets;
     try {
       await this._hass.callService("sonos_intercom", "replay", data);
       this._setStatus("Spiller av forrige melding ✓");
+    } catch (err) {
+      this._setStatus("Noe gikk galt: " + (err.message || err), true);
+    }
+  }
+
+  async _replayIndex(index) {
+    try {
+      await this._hass.callService("sonos_intercom", "replay", { index });
+      this._setStatus("Spiller av melding ✓");
+    } catch (err) {
+      this._setStatus("Noe gikk galt: " + (err.message || err), true);
+    }
+  }
+
+  _reply(msg) {
+    const targets = Array.isArray(msg.targets) ? msg.targets : [];
+    if (targets.length) {
+      this._selected = new Set(targets);
+      this._renderChips();
+    }
+    const who = msg.source || (targets.map((t) => this._name(t)).join(", "));
+    this._setStatus("Svarer til " + (who || "avsender") + " – skriv eller spill inn.");
+  }
+
+  async _acknowledge(msg) {
+    const data = {};
+    if (Array.isArray(msg.targets) && msg.targets.length) data.targets = msg.targets;
+    try {
+      await this._hass.callService("sonos_intercom", "acknowledge", data);
+      this._setStatus("Kvittering sendt ✓");
     } catch (err) {
       this._setStatus("Noe gikk galt: " + (err.message || err), true);
     }
@@ -430,6 +705,6 @@ window.customCards.push({
   description: "Spill inn eller skriv en melding, legg på en chime, og annonser på Sonos.",
 });
 
-console.info("%c SONOS-INTERCOM-CARD %c v0.3.0 ",
+console.info("%c SONOS-INTERCOM-CARD %c v0.4.0 ",
   "color:#fff;background:#8389cf;border-radius:4px 0 0 4px;padding:2px 6px",
   "color:#8389cf;background:#eef0fb;border-radius:0 4px 4px 0;padding:2px 6px");

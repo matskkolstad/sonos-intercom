@@ -14,11 +14,21 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    CONF_CUSTOM_CHIME_DIR,
     CONF_DEFAULT_TTS,
     CONF_DEFAULT_VOLUME,
+    CONF_HISTORY_SIZE,
+    CONF_QUIET_END,
+    CONF_QUIET_MAX_VOLUME,
+    CONF_QUIET_START,
     CONF_RETENTION_HOURS,
     CONF_STORAGE_DIR,
+    DEFAULT_CUSTOM_CHIME_DIR,
+    DEFAULT_HISTORY_SIZE,
     DEFAULT_OPTIONS,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_MAX_VOLUME,
+    DEFAULT_QUIET_START,
     DEFAULT_RETENTION_HOURS,
     DEFAULT_STORAGE_DIR,
     DEFAULT_VOLUME,
@@ -87,6 +97,28 @@ class SonosIntercomOptionsFlow(OptionsFlow):
                         CONF_RETENTION_HOURS, DEFAULT_RETENTION_HOURS
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=8760)),
+                vol.Optional(
+                    CONF_CUSTOM_CHIME_DIR,
+                    default=opts.get(CONF_CUSTOM_CHIME_DIR, DEFAULT_CUSTOM_CHIME_DIR),
+                ): str,
+                vol.Optional(
+                    CONF_QUIET_START,
+                    default=opts.get(CONF_QUIET_START, DEFAULT_QUIET_START),
+                ): str,
+                vol.Optional(
+                    CONF_QUIET_END,
+                    default=opts.get(CONF_QUIET_END, DEFAULT_QUIET_END),
+                ): str,
+                vol.Optional(
+                    CONF_QUIET_MAX_VOLUME,
+                    default=opts.get(
+                        CONF_QUIET_MAX_VOLUME, DEFAULT_QUIET_MAX_VOLUME
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+                vol.Optional(
+                    CONF_HISTORY_SIZE,
+                    default=opts.get(CONF_HISTORY_SIZE, DEFAULT_HISTORY_SIZE),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=200)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

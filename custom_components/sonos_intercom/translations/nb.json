@@ -18,7 +18,12 @@
           "default_volume": "Standardvolum (0-100)",
           "default_tts_engine": "Standard TTS-motor (id)",
           "storage_dir": "Lagringsmappe for opptak (relativt til config)",
-          "retention_hours": "Slett genererte filer eldre enn (timer, 0 = aldri)"
+          "retention_hours": "Slett genererte filer eldre enn (timer, 0 = aldri)",
+          "custom_chime_dir": "Mappe for egne chimes (under www/, relativt til config)",
+          "quiet_start": "Stille timer fra (TT:MM, tom = av)",
+          "quiet_end": "Stille timer til (TT:MM)",
+          "quiet_max_volume": "Maks volum i stille timer (0 = ingen annonsering)",
+          "history_size": "Antall meldinger i historikken"
         }
       }
     }

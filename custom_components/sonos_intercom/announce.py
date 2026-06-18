@@ -11,6 +11,11 @@ Chimes:
   (TTS) or recording are present, they are combined into a single MP3 with
   ffmpeg so they play seamlessly in one announcement.
 - A chime can also be played on its own (no message/audio_url).
+
+Beyond playback this module also: caps/blocks volume during quiet hours, fires
+a `sonos_intercom_announced` event, records a small in-memory history (for the
+inbox/replay features), and works on non-Sonos media_player targets (Sonos-only
+steps like snapshot/restore and grouping are skipped for those).
 """
 from __future__ import annotations
 
@@ -23,18 +28,36 @@ from functools import partial
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.network import get_url
+from homeassistant.util import dt as dt_util
 
+from .chimes import resolve_chime
 from .const import (
-    CHIME_NONE,
-    CHIME_URL_BASE,
-    CHIMES,
+    ATTR_ANNOUNCE,
+    ATTR_AUDIO_URL,
+    ATTR_CHIME,
+    ATTR_MESSAGE,
+    ATTR_SOURCE,
+    ATTR_TARGETS,
+    ATTR_VOLUME,
     CONF_DEFAULT_TTS,
+    CONF_HISTORY_SIZE,
+    CONF_QUIET_END,
+    CONF_QUIET_MAX_VOLUME,
+    CONF_QUIET_START,
     CONF_RETENTION_HOURS,
     CONF_STORAGE_DIR,
+    DATA_HISTORY,
+    DATA_LAST,
+    DEFAULT_HISTORY_SIZE,
+    DEFAULT_QUIET_MAX_VOLUME,
     DEFAULT_RETENTION_HOURS,
     DEFAULT_STORAGE_DIR,
     DOMAIN,
+    EVENT_ANNOUNCED,
+    SIGNAL_UPDATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,7 +75,13 @@ def build_local_url(hass: HomeAssistant, path: str) -> str:
     return f"{base}{path}"
 
 
-def _build_tts_media(message: str, tts_engine: str | None, options: dict) -> str:
+def _build_tts_media(
+    message: str,
+    tts_engine: str | None,
+    options: dict,
+    language: str | None = None,
+    voice: str | None = None,
+) -> str:
     """Build a media-source TTS id for the given message."""
     engine = tts_engine or options.get(CONF_DEFAULT_TTS)
     if not engine:
@@ -60,8 +89,12 @@ def _build_tts_media(message: str, tts_engine: str | None, options: dict) -> str
             "No TTS engine configured. Set a default TTS engine in the Sonos "
             "Intercom options, or pass 'tts_engine' to the service call."
         )
-    encoded = urllib.parse.quote(message or "")
-    return f"media-source://tts/{engine}?message={encoded}"
+    query = f"message={urllib.parse.quote(message or '')}"
+    if language:
+        query += f"&language={urllib.parse.quote(language)}"
+    if voice:
+        query += f"&voice={urllib.parse.quote(voice)}"
+    return f"media-source://tts/{engine}?{query}"
 
 
 def _build_media(
@@ -69,23 +102,13 @@ def _build_media(
     audio_url: str | None,
     tts_engine: str | None,
     options: dict,
+    language: str | None = None,
+    voice: str | None = None,
 ) -> tuple[str, str]:
     """Resolve the media_content_id / media_content_type to play (no chime)."""
     if audio_url:
         return audio_url, "music"
-    return _build_tts_media(message, tts_engine, options), "music"
-
-
-def _chime_path(chime: str | None) -> str | None:
-    """Return the absolute filesystem path of a bundled chime, or None."""
-    if not chime or chime == CHIME_NONE:
-        return None
-    entry = CHIMES.get(chime)
-    if not entry:
-        _LOGGER.warning("Unknown chime '%s'", chime)
-        return None
-    path = os.path.join(os.path.dirname(__file__), "www", "chimes", entry[0])
-    return path if os.path.exists(path) else None
+    return _build_tts_media(message, tts_engine, options, language, voice), "music"
 
 
 def _coordinator_volume(volume, coordinator: str) -> int | None:
@@ -100,6 +123,12 @@ def _coordinator_volume(volume, coordinator: str) -> int | None:
 def _write_bytes(path: str, data: bytes) -> None:
     with open(path, "wb") as file:
         file.write(data)
+
+
+def _is_sonos(hass: HomeAssistant, entity_id: str) -> bool:
+    """Return True if the entity is provided by the Sonos integration."""
+    entry = er.async_get(hass).async_get(entity_id)
+    return bool(entry and entry.platform == "sonos")
 
 
 async def _set_volumes(hass: HomeAssistant, targets: list[str], volume) -> None:
@@ -127,12 +156,62 @@ async def _wait_until_idle(hass: HomeAssistant, entity_id: str) -> None:
         waited += step
 
 
+# ---------------------------------------------------------------------------
+# Quiet hours
+# ---------------------------------------------------------------------------
+def _parse_hhmm(value) -> int | None:
+    """Parse a "HH:MM" string into minutes-since-midnight, or None."""
+    try:
+        hours, minutes = str(value).split(":")
+        hours, minutes = int(hours), int(minutes)
+    except (ValueError, AttributeError):
+        return None
+    if 0 <= hours < 24 and 0 <= minutes < 60:
+        return hours * 60 + minutes
+    return None
+
+
+def quiet_active(hass: HomeAssistant, options: dict) -> bool:
+    """Return True if quiet hours are currently in effect."""
+    start = _parse_hhmm(options.get(CONF_QUIET_START))
+    end = _parse_hhmm(options.get(CONF_QUIET_END))
+    if start is None or end is None or start == end:
+        return False
+    now = dt_util.now()
+    current = now.hour * 60 + now.minute
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end  # window wraps past midnight
+
+
+def _apply_quiet(hass: HomeAssistant, options: dict, volume):
+    """Cap (or signal skip) the volume for quiet hours. Returns (volume, skip)."""
+    if not quiet_active(hass, options):
+        return volume, False
+    try:
+        cap = int(options.get(CONF_QUIET_MAX_VOLUME, DEFAULT_QUIET_MAX_VOLUME))
+    except (TypeError, ValueError):
+        cap = DEFAULT_QUIET_MAX_VOLUME
+    if cap <= 0:
+        return volume, True
+    if volume is None:
+        return cap, False
+    if isinstance(volume, dict):
+        return {key: min(int(val), cap) for key, val in volume.items()}, False
+    return min(int(volume), cap), False
+
+
+# ---------------------------------------------------------------------------
+# Media resolution (TTS / recording / chime combine)
+# ---------------------------------------------------------------------------
 async def _resolve_main_audio(
     hass: HomeAssistant,
     options: dict,
     message: str | None,
     audio_url: str | None,
     tts_engine: str | None,
+    language: str | None = None,
+    voice: str | None = None,
 ) -> str:
     """Return a local filesystem path to the main audio (TTS or recording)."""
     storage_rel = options.get(CONF_STORAGE_DIR, DEFAULT_STORAGE_DIR)
@@ -142,7 +221,7 @@ async def _resolve_main_audio(
     if message:
         from homeassistant.components.tts import async_get_media_source_audio
 
-        media_id = _build_tts_media(message, tts_engine, options)
+        media_id = _build_tts_media(message, tts_engine, options, language, voice)
         extension, data = await async_get_media_source_audio(hass, media_id)
         path = os.path.join(out_dir, f"_tts_{int(time.time() * 1000)}.{extension}")
         await hass.async_add_executor_job(_write_bytes, path, data)
@@ -238,14 +317,16 @@ async def _resolve_media(
     tts_engine: str | None,
     chime: str | None,
     chime_volume=None,
+    language: str | None = None,
+    voice: str | None = None,
 ) -> tuple[str, str]:
     """Resolve the final media to play, combining a chime if requested."""
-    chime_path = _chime_path(chime)
+    chime_path, chime_url = resolve_chime(hass, options, chime)
     has_main = bool(message or audio_url)
 
     if chime_path and has_main:
         main_path = await _resolve_main_audio(
-            hass, options, message, audio_url, tts_engine
+            hass, options, message, audio_url, tts_engine, language, voice
         )
         url = await _combine_chime(
             hass, options, chime_path, main_path, chime_volume=chime_volume
@@ -253,15 +334,17 @@ async def _resolve_media(
         return url, "music"
 
     if chime_path and not has_main:
-        entry = CHIMES[chime]
-        return build_local_url(hass, f"{CHIME_URL_BASE}/{entry[0]}"), "music"
+        return build_local_url(hass, chime_url), "music"
 
     if has_main:
-        return _build_media(message, audio_url, tts_engine, options)
+        return _build_media(message, audio_url, tts_engine, options, language, voice)
 
     raise HomeAssistantError("Provide 'message', 'audio_url' or 'chime'.")
 
 
+# ---------------------------------------------------------------------------
+# Storage cleanup
+# ---------------------------------------------------------------------------
 def _prune_dir(out_dir: str, max_age_seconds: float) -> None:
     """Delete generated files older than max_age_seconds in out_dir."""
     if not os.path.isdir(out_dir):
@@ -291,27 +374,30 @@ async def _prune_storage(hass: HomeAssistant, options: dict) -> None:
     await hass.async_add_executor_job(_prune_dir, out_dir, retention * 3600)
 
 
-def _store_last(
-    hass: HomeAssistant,
-    *,
-    media_content_id: str,
-    media_content_type: str,
-    targets: list[str],
-    volume,
-    announce: bool,
-    sync: bool,
-) -> None:
-    """Remember the last announcement so it can be replayed later."""
-    hass.data.setdefault(DOMAIN, {})["_last"] = {
-        "media_content_id": media_content_id,
-        "media_content_type": media_content_type,
-        "targets": list(targets),
-        "volume": volume,
-        "announce": announce,
-        "sync": sync,
-    }
+# ---------------------------------------------------------------------------
+# History (inbox / replay)
+# ---------------------------------------------------------------------------
+def _store_last(hass: HomeAssistant, item: dict) -> None:
+    """Remember the last announcement so it can be replayed."""
+    hass.data.setdefault(DOMAIN, {})[DATA_LAST] = item
 
 
+def _record_history(hass: HomeAssistant, options: dict, item: dict) -> None:
+    """Prepend an item to the in-memory history and notify listeners."""
+    try:
+        size = int(options.get(CONF_HISTORY_SIZE, DEFAULT_HISTORY_SIZE))
+    except (TypeError, ValueError):
+        size = DEFAULT_HISTORY_SIZE
+    data = hass.data.setdefault(DOMAIN, {})
+    history = data.setdefault(DATA_HISTORY, [])
+    history.insert(0, item)
+    del history[max(size, 0):]
+    async_dispatcher_send(hass, SIGNAL_UPDATE)
+
+
+# ---------------------------------------------------------------------------
+# Playback
+# ---------------------------------------------------------------------------
 async def _play_media(
     hass: HomeAssistant,
     *,
@@ -322,15 +408,21 @@ async def _play_media(
     announce: bool = True,
     sync: bool = True,
 ) -> None:
-    """Play already-resolved media on the targets, with optional sync/ducking."""
+    """Play already-resolved media on the targets, with optional sync/ducking.
+
+    Sonos-specific steps (snapshot/restore and join/unjoin grouping) are applied
+    only to Sonos entities; non-Sonos media_players just get ``play_media``.
+    """
+    sonos = [t for t in targets if _is_sonos(hass, t)]
+    all_sonos = len(sonos) == len(targets)
     coordinator = targets[0]
     members = targets[1:]
-    group = sync and len(targets) > 1
-    use_snapshot = not announce
+    group = sync and len(targets) > 1 and all_sonos
+    use_snapshot = (not announce) and bool(sonos)
 
     if use_snapshot:
         await hass.services.async_call(
-            "sonos", "snapshot", {"entity_id": targets, "with_group": True}, blocking=True
+            "sonos", "snapshot", {"entity_id": sonos, "with_group": True}, blocking=True
         )
 
     try:
@@ -378,11 +470,19 @@ async def _play_media(
                 await hass.services.async_call(
                     "sonos",
                     "restore",
-                    {"entity_id": targets, "with_group": True},
+                    {"entity_id": sonos, "with_group": True},
                     blocking=True,
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Could not restore speakers: %s", err)
+
+
+def _message_kind(message: str | None, audio_url: str | None) -> str:
+    if message:
+        return "tts"
+    if audio_url:
+        return "recording"
+    return "chime"
 
 
 async def async_announce(
@@ -398,10 +498,19 @@ async def async_announce(
     sync: bool = True,
     chime: str | None = None,
     chime_volume=None,
+    language: str | None = None,
+    voice: str | None = None,
+    source: str | None = None,
 ) -> None:
-    """Play a TTS message and/or chime/clip on one or more Sonos speakers."""
+    """Play a TTS message and/or chime/clip on one or more media_players."""
     if not targets:
         raise HomeAssistantError("No target speakers provided.")
+
+    # Quiet hours: cap the volume, or skip entirely if the cap is 0.
+    volume, skip = _apply_quiet(hass, options, volume)
+    if skip:
+        _LOGGER.info("Quiet hours active (max volume 0); skipping announcement")
+        return
 
     # Clean up old generated files before creating new ones.
     await _prune_storage(hass, options)
@@ -414,17 +523,38 @@ async def async_announce(
         tts_engine=tts_engine,
         chime=chime,
         chime_volume=chime_volume,
+        language=language,
+        voice=voice,
     )
 
-    # Remember this announcement so sonos_intercom.replay can repeat it.
-    _store_last(
-        hass,
-        media_content_id=media_content_id,
-        media_content_type=media_content_type,
-        targets=targets,
-        volume=volume,
-        announce=announce,
-        sync=sync,
+    item = {
+        "time": dt_util.now().isoformat(timespec="seconds"),
+        "kind": _message_kind(message, audio_url),
+        "message": message,
+        "audio_url": audio_url,
+        "chime": chime,
+        "targets": list(targets),
+        "source": source,
+        "volume": volume,
+        "announce": announce,
+        "sync": sync,
+        "media_content_id": media_content_id,
+        "media_content_type": media_content_type,
+    }
+    _store_last(hass, item)
+    _record_history(hass, options, item)
+
+    hass.bus.async_fire(
+        EVENT_ANNOUNCED,
+        {
+            ATTR_MESSAGE: message,
+            ATTR_AUDIO_URL: audio_url,
+            ATTR_CHIME: chime,
+            ATTR_TARGETS: list(targets),
+            ATTR_VOLUME: volume,
+            ATTR_SOURCE: source,
+            ATTR_ANNOUNCE: announce,
+        },
     )
 
     await _play_media(
@@ -443,23 +573,57 @@ async def async_replay(
     *,
     targets: list[str] | None = None,
     volume=None,
+    index: int = 0,
 ) -> None:
-    """Replay the last announcement, optionally on different targets/volume.
+    """Replay an announcement from the history (0 = most recent).
 
     Note: the stored media may have been pruned by automatic storage cleanup
     (recordings/combined chimes are files); pure TTS replays always work since
     they are regenerated from a media-source id.
     """
-    last = hass.data.get(DOMAIN, {}).get("_last")
-    if not last:
-        raise HomeAssistantError("No previous announcement to replay.")
+    data = hass.data.get(DOMAIN, {})
+    history = data.get(DATA_HISTORY) or []
+    if 0 <= index < len(history):
+        item = history[index]
+    elif index == 0 and data.get(DATA_LAST):
+        item = data[DATA_LAST]
+    else:
+        raise HomeAssistantError("No announcement at that history position to replay.")
 
     await _play_media(
         hass,
-        media_content_id=last["media_content_id"],
-        media_content_type=last["media_content_type"],
-        targets=targets or last["targets"],
-        volume=volume if volume is not None else last["volume"],
-        announce=last["announce"],
-        sync=last["sync"],
+        media_content_id=item["media_content_id"],
+        media_content_type=item["media_content_type"],
+        targets=targets or item["targets"],
+        volume=volume if volume is not None else item.get("volume"),
+        announce=item.get("announce", True),
+        sync=item.get("sync", True),
+    )
+
+
+async def async_acknowledge(
+    hass: HomeAssistant,
+    options: dict,
+    *,
+    targets: list[str] | None = None,
+    message: str | None = None,
+    chime: str | None = "soft_ping",
+    volume=None,
+) -> None:
+    """Send a quick acknowledgement back to the last sender (or given targets)."""
+    if not targets:
+        last = hass.data.get(DOMAIN, {}).get(DATA_LAST)
+        targets = list(last["targets"]) if last and last.get("targets") else None
+    if not targets:
+        raise HomeAssistantError("No targets to acknowledge; nothing to reply to.")
+
+    await async_announce(
+        hass,
+        options,
+        message=message,
+        targets=targets,
+        volume=volume,
+        announce=True,
+        chime=chime,
+        source="Kvittering",
     )

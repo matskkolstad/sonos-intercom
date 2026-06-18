@@ -79,6 +79,24 @@ announce:
       example: "tts.google_translate_en_com"
       selector:
         text:
+    language:
+      name: TTS language
+      description: Language code for the TTS message (engine-dependent).
+      example: "nb"
+      selector:
+        text:
+    voice:
+      name: TTS voice
+      description: Voice for the TTS message, passed as a TTS option (engine-specific).
+      example: "Jenny"
+      selector:
+        text:
+    source:
+      name: Source label
+      description: Free-text label of who/where the message is from (shown in history).
+      example: "Kjøkkenet"
+      selector:
+        text:
     sync:
       name: Synced playback
       description: Temporarily group multiple speakers for synchronized playback.
@@ -87,15 +105,24 @@ announce:
         boolean:
 
 replay:
-  name: Replay last message
+  name: Replay a message
   description: >-
-    Replay the most recent announcement. Optionally override the target
-    speakers and/or the volume; otherwise the last ones are reused.
+    Replay an announcement from the history. Optionally override the target
+    speakers and/or the volume; otherwise the stored ones are reused.
   fields:
+    index:
+      name: History index
+      description: Which message to replay (0 = most recent).
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 200
+          mode: box
     targets:
       name: Speakers
       description: >-
-        Speakers to replay on. If omitted, the speakers from the last
+        Speakers to replay on. If omitted, the speakers from the stored
         announcement are reused.
       selector:
         entity:
@@ -104,7 +131,45 @@ replay:
             - domain: media_player
     volume:
       name: Volume
-      description: Volume 0-100. If omitted, the last volume is reused.
+      description: Volume 0-100. If omitted, the stored volume is reused.
+      example: 35
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+
+acknowledge:
+  name: Acknowledge / reply
+  description: >-
+    Send a quick acknowledgement (chime, optionally with a short message) back
+    to the last sender, or to the given speakers.
+  fields:
+    targets:
+      name: Speakers
+      description: >-
+        Speakers to acknowledge on. If omitted, the last sender's speakers are
+        used.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: media_player
+    message:
+      name: Message
+      description: Optional short text to read aloud after the chime.
+      example: "Mottatt"
+      selector:
+        text:
+    chime:
+      name: Chime
+      description: Chime to play (defaults to soft_ping).
+      example: soft_ping
+      selector:
+        text:
+    volume:
+      name: Volume
+      description: Volume 0-100.
       example: 35
       selector:
         number:

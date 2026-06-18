@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-18
+
+### Added
+
+- **Custom chimes.** Upload your own chime audio directly from the card (file picker,
+  "➕ Last opp chime"), or drop MP3 files into the custom chime folder. Uploaded files
+  are converted to MP3 with ffmpeg and stored in `custom_chime_dir` (default
+  `www/sonos_intercom_chimes`). Custom chimes then appear in the card's chime dropdown
+  alongside the 5 bundled ones, and the `chime` service param accepts custom ids (the
+  uploaded file name without extension). New upload endpoint:
+  `POST /api/sonos_intercom/chime_upload`.
+- **Quiet hours / night mode.** New options `quiet_start` and `quiet_end` (HH:MM) plus
+  `quiet_max_volume` (0-100, default 20). During quiet hours the announcement volume is
+  capped to `quiet_max_volume`; if it is 0, announcements are skipped entirely.
+- **TTS language and voice.** The `announce` service accepts `language` (e.g. `nb`,
+  `en`) and `voice` (engine-specific). The card exposes them in a new "Avansert"
+  section in text mode.
+- **`sonos_intercom.acknowledge` service.** Sends a quick acknowledgement ("Mottatt")
+  back to the last message's source/targets. Params: `targets` (optional), `message`
+  (optional), `chime` (optional, default `soft_ping`), `volume` (optional). A thin
+  wrapper around `announce` with a default chime.
+- **Inbox / message history (first-cut two-way intercom).** Recent messages are kept in
+  memory (`history_size` option, default 20) and exposed through the new
+  `sensor.sonos_intercom_last_message` entity. The card renders an "Innboks / Historikk"
+  section with per-item replay ("▶") and reply ("↩︎ Svar", presets the sender's
+  speakers), plus an acknowledge button ("✔ Kvitter"). Because Sonos speakers have no
+  microphone, "two-way" is a compose-and-send message inbox + reply/acknowledge flow,
+  not live voice.
+- **`sensor.sonos_intercom_last_message` entity.** State is the last message text
+  (`[Opptak]` for a recording, `[Chime]` for chime-only, `Ingen` if none). Attributes:
+  `messages` (recent items: time, kind, message, audio_url, chime, targets, source,
+  volume), `chimes` (available chimes incl. custom: id, label, custom, url),
+  `quiet_active`, `last_source`, `last_targets`. The card reads this entity to render
+  the chime dropdown, the inbox/history, and quiet-hours state.
+- **`sonos_intercom_announced` event.** Fired on every `announce` (and `acknowledge`)
+  with data `{message, audio_url, chime, targets, volume, source}` — a hook for user
+  automations.
+- **`source` param** on `announce`: free-text label of who/where the message came from,
+  shown in the history/inbox and used for replies.
+- **Recording preview in the card.** Listen to a browser recording before sending
+  ("▶ Lytt").
+- **Persisted card settings.** The card remembers volume, chime, chime volume, announce
+  toggle, and language/voice between sessions via `localStorage`.
+- **Generic `media_player` support.** `announce` now also works on non-Sonos
+  `media_player` entities. Sonos-specific steps (snapshot/restore, join/unjoin grouping)
+  are applied only to Sonos entities (detected via the entity registry); non-Sonos
+  targets just use `play_media` with the announce flag and skip grouping. Untested by
+  the maintainer (Sonos-only setup).
+
+### Changed
+
+- **`sonos_intercom.replay`** now accepts an optional `index` (integer, default 0 =
+  most recent) to replay a specific item from the history, in addition to the existing
+  optional `targets` / `volume` overrides.
+- The card now dims/disables unavailable speakers, and its chime list is dynamic
+  (bundled + custom) instead of a fixed list of five.
+
 ## [0.3.0] - 2026-06-18
 
 ### Added

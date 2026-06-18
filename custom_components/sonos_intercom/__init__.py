@@ -10,16 +10,21 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .announce import async_announce, async_replay
+from .announce import async_acknowledge, async_announce, async_replay
+from .chimes import async_refresh_chimes
 from .const import (
     ATTR_ANNOUNCE,
     ATTR_AUDIO_URL,
     ATTR_CHIME,
     ATTR_CHIME_VOLUME,
+    ATTR_INDEX,
+    ATTR_LANGUAGE,
     ATTR_MESSAGE,
+    ATTR_SOURCE,
     ATTR_SYNC,
     ATTR_TARGETS,
     ATTR_TTS_ENGINE,
+    ATTR_VOICE,
     ATTR_VOLUME,
     CARD_URL,
     CARD_VERSION,
@@ -27,23 +32,27 @@ from .const import (
     CONF_DEFAULT_TTS,
     DEFAULT_OPTIONS,
     DOMAIN,
+    PLATFORMS,
+    SERVICE_ACKNOWLEDGE,
     SERVICE_ANNOUNCE,
     SERVICE_REPLAY,
     STATIC_BASE,
 )
-from .http import IntercomUploadView
+from .http import ChimeUploadView, IntercomUploadView
 
 _LOGGER = logging.getLogger(__name__)
+
+_VOLUME_SELECTOR = vol.Any(
+    vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+    {cv.entity_id: vol.All(vol.Coerce(int), vol.Range(min=0, max=100))},
+)
 
 ANNOUNCE_SCHEMA = vol.Schema(
     {
         vol.Exclusive(ATTR_MESSAGE, "content"): cv.string,
         vol.Exclusive(ATTR_AUDIO_URL, "content"): cv.string,
         vol.Required(ATTR_TARGETS): cv.entity_ids,
-        vol.Optional(ATTR_VOLUME): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            {cv.entity_id: vol.All(vol.Coerce(int), vol.Range(min=0, max=100))},
-        ),
+        vol.Optional(ATTR_VOLUME): _VOLUME_SELECTOR,
         vol.Optional(ATTR_ANNOUNCE, default=True): cv.boolean,
         vol.Optional(ATTR_TTS_ENGINE): cv.string,
         vol.Optional(ATTR_SYNC, default=True): cv.boolean,
@@ -51,16 +60,26 @@ ANNOUNCE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_CHIME_VOLUME): vol.All(
             vol.Coerce(int), vol.Range(min=0, max=100)
         ),
+        vol.Optional(ATTR_LANGUAGE): cv.string,
+        vol.Optional(ATTR_VOICE): cv.string,
+        vol.Optional(ATTR_SOURCE): cv.string,
     }
 )
 
 REPLAY_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_TARGETS): cv.entity_ids,
-        vol.Optional(ATTR_VOLUME): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            {cv.entity_id: vol.All(vol.Coerce(int), vol.Range(min=0, max=100))},
-        ),
+        vol.Optional(ATTR_VOLUME): _VOLUME_SELECTOR,
+        vol.Optional(ATTR_INDEX, default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
+    }
+)
+
+ACKNOWLEDGE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_TARGETS): cv.entity_ids,
+        vol.Optional(ATTR_MESSAGE): cv.string,
+        vol.Optional(ATTR_CHIME, default="soft_ping"): cv.string,
+        vol.Optional(ATTR_VOLUME): _VOLUME_SELECTOR,
     }
 )
 
@@ -81,10 +100,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not hass.data[DOMAIN].get("_view_registered"):
         hass.http.register_view(IntercomUploadView())
+        hass.http.register_view(ChimeUploadView())
         hass.data[DOMAIN]["_view_registered"] = True
 
     await _async_register_static(hass)
     await _async_register_card(hass)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Populate the available-chimes cache for the sensor / card.
+    await async_refresh_chimes(hass, hass.data[DOMAIN][entry.entry_id])
 
     if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
 
@@ -103,6 +127,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 sync=call.data.get(ATTR_SYNC, True),
                 chime=call.data.get(ATTR_CHIME),
                 chime_volume=call.data.get(ATTR_CHIME_VOLUME),
+                language=call.data.get(ATTR_LANGUAGE),
+                voice=call.data.get(ATTR_VOICE),
+                source=call.data.get(ATTR_SOURCE),
             )
 
         hass.services.async_register(
@@ -116,10 +143,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass,
                 targets=call.data.get(ATTR_TARGETS),
                 volume=call.data.get(ATTR_VOLUME),
+                index=call.data.get(ATTR_INDEX, 0),
             )
 
         hass.services.async_register(
             DOMAIN, SERVICE_REPLAY, handle_replay, schema=REPLAY_SCHEMA
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_ACKNOWLEDGE):
+
+        async def handle_acknowledge(call: ServiceCall) -> None:
+            await async_acknowledge(
+                hass,
+                get_options(hass),
+                targets=call.data.get(ATTR_TARGETS),
+                message=call.data.get(ATTR_MESSAGE),
+                chime=call.data.get(ATTR_CHIME, "soft_ping"),
+                volume=call.data.get(ATTR_VOLUME),
+            )
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_ACKNOWLEDGE, handle_acknowledge, schema=ACKNOWLEDGE_SCHEMA
         )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -183,15 +227,17 @@ async def _async_register_card(hass: HomeAssistant) -> None:
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     hass.data[DOMAIN][entry.entry_id] = {**DEFAULT_OPTIONS, **entry.options}
+    # The custom chime dir may have changed; refresh the cached chime list.
+    await async_refresh_chimes(hass, hass.data[DOMAIN][entry.entry_id])
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     remaining = [k for k in hass.data.get(DOMAIN, {}) if not str(k).startswith("_")]
     if not remaining:
-        if hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
-            hass.services.async_remove(DOMAIN, SERVICE_ANNOUNCE)
-        if hass.services.has_service(DOMAIN, SERVICE_REPLAY):
-            hass.services.async_remove(DOMAIN, SERVICE_REPLAY)
+        for service in (SERVICE_ANNOUNCE, SERVICE_REPLAY, SERVICE_ACKNOWLEDGE):
+            if hass.services.has_service(DOMAIN, service):
+                hass.services.async_remove(DOMAIN, service)
     return True
