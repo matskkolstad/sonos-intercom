@@ -1,7 +1,7 @@
 {
   "domain": "sonos_intercom",
   "name": "Sonos Intercom",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "documentation": "https://github.com/matskkolstad/sonos-intercom",
   "issue_tracker": "https://github.com/matskkolstad/sonos-intercom/issues",
   "codeowners": ["@matskkolstad"],

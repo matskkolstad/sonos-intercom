@@ -21,6 +21,7 @@ from .const import (
     ATTR_TTS_ENGINE,
     ATTR_VOLUME,
     CARD_URL,
+    CARD_VERSION,
     CONF_DEFAULT_VOLUME,
     CONF_DEFAULT_TTS,
     DEFAULT_OPTIONS,
@@ -108,7 +109,7 @@ async def _async_register_static(hass: HomeAssistant) -> None:
     except RuntimeError:
         # Already registered (e.g. reload) - ignore.
         pass
-    add_extra_js_url(hass, CARD_URL)
+    add_extra_js_url(hass, f"{CARD_URL}?v={CARD_VERSION}")
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

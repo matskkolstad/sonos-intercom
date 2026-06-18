@@ -400,6 +400,6 @@ window.customCards.push({
   description: "Spill inn eller skriv en melding, legg på en chime, og annonser på Sonos.",
 });
 
-console.info("%c SONOS-INTERCOM-CARD %c v0.2.0 ",
+console.info("%c SONOS-INTERCOM-CARD %c v0.2.1 ",
   "color:#fff;background:#8389cf;border-radius:4px 0 0 4px;padding:2px 6px",
   "color:#8389cf;background:#eef0fb;border-radius:0 4px 4px 0;padding:2px 6px");
