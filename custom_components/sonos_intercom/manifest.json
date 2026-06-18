@@ -1,0 +1,14 @@
+{
+  "domain": "sonos_intercom",
+  "name": "Sonos Intercom",
+  "version": "0.1.0",
+  "documentation": "https://github.com/matskkolstad/sonos-intercom",
+  "issue_tracker": "https://github.com/matskkolstad/sonos-intercom/issues",
+  "codeowners": ["@matskkolstad"],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "integration_type": "service",
+  "dependencies": ["http", "frontend", "media_player"],
+  "after_dependencies": ["sonos", "tts"],
+  "requirements": []
+}

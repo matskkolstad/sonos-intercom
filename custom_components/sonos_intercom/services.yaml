@@ -1,0 +1,56 @@
+announce:
+  name: Announce
+  description: >-
+    Play a text-to-speech message or an audio clip on one or more Sonos
+    speakers, with optional ducking of currently playing audio.
+  fields:
+    message:
+      name: Message
+      description: Text to read aloud (text-to-speech). Use this OR audio_url.
+      example: "Dinner is ready"
+      selector:
+        text:
+    audio_url:
+      name: Audio URL
+      description: URL to a ready audio file (e.g. a recording). Use this OR message.
+      example: "http://homeassistant.local:8123/local/sonos_intercom/intercom_123.mp3"
+      selector:
+        text:
+    targets:
+      name: Speakers
+      description: The Sonos media_player entities to play on.
+      required: true
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: media_player
+    volume:
+      name: Volume
+      description: >-
+        Volume 0-100. A single number applies to all speakers; an object maps
+        entity_id to volume for per-speaker levels.
+      example: 35
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    announce:
+      name: Announce (duck)
+      description: Lower current audio, play the message on top, then restore.
+      default: true
+      selector:
+        boolean:
+    tts_engine:
+      name: TTS engine
+      description: TTS engine id for the message (overrides the configured default).
+      example: "tts.google_translate_en_com"
+      selector:
+        text:
+    sync:
+      name: Synced playback
+      description: Temporarily group multiple speakers for synchronized playback.
+      default: true
+      selector:
+        boolean:

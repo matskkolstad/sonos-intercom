@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sonos Intercom",
+        "description": "Set up Sonos Intercom. You can adjust defaults afterwards under Configure."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Sonos Intercom is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sonos Intercom settings",
+        "data": {
+          "default_volume": "Default volume (0-100)",
+          "default_tts_engine": "Default TTS engine id",
+          "storage_dir": "Storage folder for recordings (relative to config)"
+        }
+      }
+    }
+  }
+}

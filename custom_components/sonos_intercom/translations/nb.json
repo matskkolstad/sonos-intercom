@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sonos Intercom",
+        "description": "Sett opp Sonos Intercom. Du kan justere standardverdier etterpå under Konfigurer."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Sonos Intercom er allerede konfigurert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Innstillinger for Sonos Intercom",
+        "data": {
+          "default_volume": "Standardvolum (0-100)",
+          "default_tts_engine": "Standard TTS-motor (id)",
+          "storage_dir": "Lagringsmappe for opptak (relativt til config)"
+        }
+      }
+    }
+  }
+}
